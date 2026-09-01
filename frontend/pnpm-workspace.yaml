@@ -1,0 +1,9 @@
+# pnpm asks which packages may run install scripts. Both answers are deliberate.
+allowBuilds:
+  # msw's postinstall only sets up the browser service worker. Tests use msw/node
+  # exclusively (src/test/msw-server.ts), so the browser integration is dead weight.
+  msw: false
+  # Native resolver behind eslint-import-resolver-typescript. Allowed: the lint run
+  # touches every one of the 150+ ported files and the native build is noticeably
+  # faster than the fallback.
+  unrs-resolver: true

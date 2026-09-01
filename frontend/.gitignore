@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+coverage/
+
+# Cloudflare
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Editors / OS
+.DS_Store
+*.local

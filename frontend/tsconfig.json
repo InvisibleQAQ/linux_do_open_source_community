@@ -1,0 +1,40 @@
+{
+  /**
+   * Deliberately mirrors the Minimal v7.7.0 tsconfig for the ported
+   * `theme/`, `layouts/core/` and `components/` trees, which are known to
+   * typecheck under exactly these flags.
+   *
+   * Stricter flags (`noUncheckedIndexedAccess`, `verbatimModuleSyntax`) were
+   * tried and rejected: they produce errors inside vendored files we do not
+   * want to fork. Our own code is held to a higher bar by ESLint instead.
+   */
+  "compilerOptions": {
+    /* Bundler */
+    "baseUrl": ".",
+    "module": "esnext",
+    "types": ["vite/client", "node"],
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "resolveJsonModule": true,
+
+    /* Build */
+    "target": "es2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "moduleDetection": "force",
+    "moduleResolution": "bundler",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "incremental": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+
+    /* Linting */
+    "strict": true,
+    "noEmit": true,
+    "strictNullChecks": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
