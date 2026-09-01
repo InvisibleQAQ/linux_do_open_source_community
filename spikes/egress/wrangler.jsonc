@@ -1,0 +1,15 @@
+{
+  // Throwaway Worker for the egress connectivity spike. Deliberately separate
+  // from the root wrangler.jsonc: no D1 binding, no assets, no cron — nothing
+  // that could accidentally touch production state.
+  //
+  // Delete this directory once egress is confirmed and the result is recorded in
+  // .trellis/tasks/08-31-cloudflare-stack-prd/research/rss-pipeline.md.
+  "name": "linuxdo-oss-egress-spike",
+  "main": "src/main.py",
+  "compatibility_date": "2026-08-31",
+  "compatibility_flags": ["python_workers"],
+  "observability": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,13 @@
+[project]
+name = "linuxdo-oss-egress-spike"
+version = "0.1.0"
+description = "Deployed-Worker egress connectivity spike (PRD release prerequisite)"
+requires-python = ">=3.13"
+
+# No dependencies on purpose: `workers.fetch` is all this needs, and a dependency
+# would add a wheel-resolution step to a probe whose whole point is to answer one
+# question fast.
+dependencies = []
+
+[dependency-groups]
+dev = ["workers-py>=1.17.1", "workers-runtime-sdk>=1.8.2"]
