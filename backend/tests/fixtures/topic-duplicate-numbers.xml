@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Both items claim floor 1. A feed that contradicts itself must not produce two
+     rows with the same (topic_id, post_number): the topic is written in one
+     batch(), so one constraint violation would lose the good post too. -->
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>楼层号重复的主题</title>
+    <link>https://linux.do/t/topic/2837724</link>
+    <item>
+      <title>楼层号重复的主题</title>
+      <dc:creator>楼主</dc:creator>
+      <description>&lt;p&gt;第一条&lt;/p&gt;</description>
+      <link>https://linux.do/t/topic/2837724/1</link>
+      <pubDate>Mon, 31 Aug 2026 15:18:11 +0000</pubDate>
+      <guid isPermaLink="false">https://linux.do/t/topic/2837724/1?a</guid>
+    </item>
+    <item>
+      <title>楼层号重复的主题</title>
+      <dc:creator>回复者</dc:creator>
+      <description>&lt;p&gt;第二条 https://github.com/dup/repo&lt;/p&gt;</description>
+      <link>https://linux.do/t/topic/2837724/1</link>
+      <pubDate>Mon, 31 Aug 2026 15:30:00 +0000</pubDate>
+      <guid isPermaLink="false">https://linux.do/t/topic/2837724/1?b</guid>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A truncated response: the item and the enclosing elements are never closed. This
+  is what a proxy cutting a connection mid-body actually looks like, and it must
+  surface as the parsing layer's own error type rather than as a partial result.
+-->
+<rss version="2.0">
+  <channel>
+    <title>Linux.do Channel</title>
+    <item>
+      <title>@a 在 某主题 中发帖</title>
+      <description>&lt;a href=&quot;https://linux.do/t/topic/2837720/1&quot;&gt;linux.do

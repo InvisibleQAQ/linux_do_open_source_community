@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A topic with exactly one post: the OP, which is always retained. -->
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>只有一楼的主题</title>
+    <link>https://linux.do/t/topic/2837722</link>
+    <item>
+      <title>只有一楼的主题</title>
+      <dc:creator>独行侠</dc:creator>
+      <description>&lt;p&gt;项目地址：&lt;a href="https://github.com/solo/only-repo"&gt;solo/only-repo&lt;/a&gt;&lt;/p&gt;</description>
+      <link>https://linux.do/t/topic/2837722/1</link>
+      <pubDate>Mon, 31 Aug 2026 15:18:11 +0000</pubDate>
+      <guid isPermaLink="false">https://linux.do/t/topic/2837722/1</guid>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A well-formed feed with no items. RSSHub serves this whenever the channel has
+  published nothing in the window, so it is a normal outcome, not a failure.
+-->
+<rss version="2.0">
+  <channel>
+    <title>Linux.do Channel</title>
+    <link>https://t.me/s/linux_do_channel</link>
+    <description>Telegram 频道 Linux.do Channel</description>
+    <ttl>5</ttl>
+  </channel>
+</rss>

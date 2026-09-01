@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The real channel feed shape, verified against
+  https://rsshub.rssforever.com/telegram/channel/linux_do_channel on 2026-08-31.
+
+  Every item carries exactly title/description/link/guid/pubDate. `link` and `guid`
+  point at Telegram; the linux.do topic URL only exists inside the HTML-escaped
+  description, with a floor suffix and with an onclick attribute.
+
+  Expected candidates: 2837720, 2837721, 2837722.
+-->
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Linux.do Channel</title>
+    <link>https://t.me/s/linux_do_channel</link>
+    <description>Telegram 频道 Linux.do Channel</description>
+    <generator>RSSHub</generator>
+    <language>zh-cn</language>
+    <ttl>5</ttl>
+    <item>
+      <title>@Ammdjs 在 分享一个开源小工具 中发帖</title>
+      <description>&lt;p&gt;分享一个开源小工具，欢迎试用&lt;/p&gt;&lt;a href=&quot;https://linux.do/t/topic/2837720/1&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot; onclick=&quot;return confirm('open?')&quot;&gt;linux.do&lt;/a&gt;</description>
+      <link>https://t.me/linux_do_channel/492492</link>
+      <guid isPermaLink="false">https://t.me/linux_do_channel/492492</guid>
+      <pubDate>Mon, 31 Aug 2026 15:18:11 GMT</pubDate>
+    </item>
+    <item>
+      <title>linmao 在 另一个主题 中发帖</title>
+      <description>&lt;p&gt;顺便回一下上面那个帖子&lt;/p&gt;&lt;a href=&quot;https://linux.do/t/topic/2837721/3&quot;&gt;新主题&lt;/a&gt;&lt;a href=&quot;https://linux.do/t/topic/2837720/12&quot;&gt;旧主题&lt;/a&gt;</description>
+      <link>https://t.me/linux_do_channel/492493</link>
+      <guid isPermaLink="false">https://t.me/linux_do_channel/492493</guid>
+      <pubDate>Mon, 31 Aug 2026 16:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>@someone 在 无关内容 中发帖</title>
+      <description>&lt;p&gt;这条消息没有主题链接，只有&lt;/p&gt;&lt;a href=&quot;https://github.com/owner/repo&quot;&gt;github&lt;/a&gt;&lt;a href=&quot;https://t.me/linux_do_channel/492000&quot;&gt;tg&lt;/a&gt;</description>
+      <link>https://t.me/linux_do_channel/492494</link>
+      <guid isPermaLink="false">https://t.me/linux_do_channel/492494</guid>
+      <pubDate>Mon, 31 Aug 2026 16:05:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>@nobody 在 第三个主题 中发帖</title>
+      <description>&lt;p&gt;原帖https://linux.do/t/topic/2837722?u=nobody#post_2，另外还有别的内容&lt;/p&gt;</description>
+      <link>https://t.me/linux_do_channel/492495</link>
+      <guid isPermaLink="false">https://t.me/linux_do_channel/492495</guid>
+      <pubDate>Mon, 31 Aug 2026 16:10:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

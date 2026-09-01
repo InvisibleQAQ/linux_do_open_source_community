@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Well-formed, no items. What a topic with nothing readable looks like; a normal
+     outcome, not a parse failure. -->
+<rss version="2.0">
+  <channel>
+    <title>空主题</title>
+    <link>https://linux.do/t/topic/2837725</link>
+    <description>空主题</description>
+  </channel>
+</rss>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Same generator, links in every field EXCEPT the description. The live feed puts
+  them in the description today; the PRD requires all supported fields to be
+  inspected, because that is not this project's decision to make.
+
+  Item 4 is the case only the structural href pass can see: the id's leading digit
+  is written as the character reference &#50;, which a text regex cannot resolve.
+  (`&amp;#50;` here is the XML escaping of `&#50;` inside the escaped HTML.)
+
+  Expected candidates: 2900001, 2900002, 2900003, 2900004.
+-->
+<rss version="2.0">
+  <channel>
+    <title>Linux.do Channel</title>
+    <link>https://t.me/s/linux_do_channel</link>
+    <item>
+      <title>@a 在 https://linux.do/t/topic/2900001/1 中发帖</title>
+      <description>&lt;p&gt;标题里有链接&lt;/p&gt;</description>
+      <link>https://t.me/linux_do_channel/492496</link>
+      <guid isPermaLink="false">https://t.me/linux_do_channel/492496</guid>
+      <pubDate>Mon, 31 Aug 2026 17:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>@b 在 某主题 中发帖</title>
+      <description>&lt;p&gt;guid 里有链接&lt;/p&gt;</description>
+      <link>https://t.me/linux_do_channel/492497</link>
+      <guid isPermaLink="true">https://linux.do/t/topic/2900002</guid>
+      <pubDate>Mon, 31 Aug 2026 17:05:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>@c 在 某主题 中发帖</title>
+      <description>&lt;p&gt;链接在一个没人认识的元素里&lt;/p&gt;</description>
+      <link>https://t.me/linux_do_channel/492498</link>
+      <source url="https://t.me/s/linux_do_channel">https://linux.do/t/topic/2900003/9</source>
+      <guid isPermaLink="false">https://t.me/linux_do_channel/492498</guid>
+      <pubDate>Mon, 31 Aug 2026 17:10:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>@d 在 某主题 中发帖</title>
+      <description>&lt;a href=&quot;https://linux.do/t/topic/&amp;#50;900004/1&quot;&gt;实体编码的链接&lt;/a&gt;</description>
+      <link>https://t.me/linux_do_channel/492499</link>
+      <guid isPermaLink="false">https://t.me/linux_do_channel/492499</guid>
+      <pubDate>Mon, 31 Aug 2026 17:15:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
