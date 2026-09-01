@@ -1,0 +1,78 @@
+[project]
+name = "linuxdo-oss-worker"
+version = "0.1.0"
+description = "Linux.do GitHub 开源项目聚合器 — Cloudflare Python Worker"
+
+# Must match the runtime the compatibility_date selects. With
+# compatibility_date 2026-08-31 + ["python_workers"], workerd runs
+# CPython 3.13.2 on Pyodide 0.28.1. See the freeze note in wrangler.jsonc.
+requires-python = ">=3.13"
+
+dependencies = [
+    "fastapi",
+    # Pinned deliberately: 2.10.6 is the wasm ceiling on the 3.13 target. Leaving
+    # it unpinned makes uv backtrack and emit resolution errors that look unrelated.
+    "pydantic==2.10.6",
+]
+
+[dependency-groups]
+# Host-side only. None of these are vendored into the Worker bundle.
+dev = [
+    "workers-py>=1.17.1",
+    "workers-runtime-sdk>=1.8.2",
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+# NOTE: httpx is deliberately absent.
+#
+# Outbound HTTP goes through `from workers import fetch` (see
+# backend/src/linuxdo_oss/adapters/http.py). httpx's sync client blocks the
+# isolate, and every module-level import is executed at deploy time and baked
+# into the memory snapshot — against a 1 s Worker startup limit, a dependency we
+# do not need is a cost we do not pay.
+#
+# NEVER create a requirements.txt in this repo: pywrangler's
+# check_requirements_txt() aborts with exit code 1 if one exists.
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+markers = [
+    # Tests that spawn a `pywrangler dev` subprocess and assert over HTTP.
+    # `pytest -m "not worker"` keeps the pure-domain suite fast.
+    "worker: requires a running local Worker (slow, spawns a subprocess)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["backend/src"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",
+]
+
+ignore = [
+    # RUF001/002/003 flag "ambiguous unicode characters". This project is
+    # deliberately Chinese: full-width punctuation (，。、：（）—) appears in
+    # user-facing strings, comments and docstrings by design. The rule would fire
+    # on essentially every line of Chinese prose, so it reports noise, not risk.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # UP046 wants PEP 695 `class CursorPage[T]`. The runtime pins pydantic 2.10.6,
+    # where `Generic[T]` is unambiguously supported and the PEP 695 form is not
+    # verified. See the comment in api/schemas.py.
+    "UP046",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["linuxdo_oss"]

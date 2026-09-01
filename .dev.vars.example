@@ -1,0 +1,16 @@
+# Local secrets for `uv run pywrangler dev`.
+#
+# Copy to `.dev.vars` (gitignored) and fill in. In production these are set with
+#   uv run pywrangler secret put LLM_API_KEY
+# and never live in a file.
+#
+# Two things to know about `.dev.vars`:
+#   * If `.dev.vars` exists, `.env` is ignored entirely — do not create both.
+#   * A `.dev.vars` file must contain ALL secrets for its environment; there is
+#     no merging with a base file. Per-environment variants are
+#     `.dev.vars.<environment-name>`.
+#
+# Non-secret configuration (LLM_BASE_URL, LLM_MODEL, CHANNEL_FEED_URL, ...) lives
+# in `wrangler.jsonc` under `vars`, not here.
+
+LLM_API_KEY="sk-replace-me"

@@ -1,0 +1,41 @@
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# pywrangler generated artifacts.
+# `pylock.toml` is deliberately NOT ignored: it is the resolved lock and the only
+# thing that pins the wasm wheel set (including pydantic-core) reproducibly across
+# machines. Commit it.
+python_modules/
+.venv-workers/
+
+# Cloudflare — secrets and local state. NEVER commit these.
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+!.env.example
+
+# Trellis runtime
+.trellis/.runtime/
+.trellis/scripts/**/__pycache__/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+*.local
+.idea/
+.vscode/

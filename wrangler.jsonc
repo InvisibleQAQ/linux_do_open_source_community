@@ -1,0 +1,92 @@
+{
+  // ONE Worker serves everything: the SPA's static assets, the read API, and the
+  // 5-minute cron. Verified constraints behind this shape:
+  //
+  //  - `@cloudflare/vite-plugin` CANNOT be used: it only resolves a `main` with a
+  //    .js/.mjs/.ts/.mts/.jsx/.tsx extension, so a `.py` entrypoint is rejected.
+  //    The frontend is therefore a plain `vite build` and the Worker is driven by
+  //    `pywrangler`.
+  //  - Cloudflare Pages is feature-frozen for new projects ("all of our investment
+  //    ... dedicated to improving Workers"), so assets ride on this Worker.
+  //  - Only one collection of static assets can be configured per Worker.
+  //
+  // Docs: https://developers.cloudflare.com/workers/languages/python/packages/fastapi/
+  //       https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/
+  "name": "linuxdo-oss-aggregator",
+  "main": "backend/src/main.py",
+
+  // ⚠ FROZEN — do not bump as routine hygiene.
+  //
+  // The Python minor version is selected by compatibility_date + flags:
+  //   python_workers                 -> CPython 3.12
+  //   + date >= 2025-09-29           -> CPython 3.13 (Pyodide 0.28.1)  <-- we are here
+  //   + date >= 2026-09-08           -> CPython 3.14 (Pyodide 314.0.6)
+  //
+  // Moving this date past 2026-09-08 silently changes the wasm wheel ABI and
+  // re-resolves every dependency. Treat it as a migration task: re-run
+  // `uv run pywrangler sync` and the full test suite, and re-pin pydantic.
+  //
+  // Python Workers are in open beta; the flag has no compatEnableDate, so it
+  // must stay declared explicitly.
+  // https://developers.cloudflare.com/workers/languages/python/
+  "compatibility_date": "2026-08-31",
+  "compatibility_flags": ["python_workers"],
+
+  "assets": {
+    "directory": "./frontend/dist/",
+    "binding": "ASSETS",
+
+    // Unmatched paths return /index.html with 200 so client-side routing works.
+    "not_found_handling": "single-page-application",
+
+    // Only /api/* reaches Python. Every static file and the SPA fallback are
+    // served by the edge asset router with zero Worker invocations — which also
+    // keeps us clear of the ~1s Python cold start on ordinary page loads.
+    // Array form requires Wrangler >= 4.20.0.
+    "run_worker_first": ["/api/*"]
+  },
+
+  // PRD: every 5 minutes, at most 20 due topics per run.
+  // Local trigger: curl "http://localhost:8787/cdn-cgi/handler/scheduled"
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
+  "d1_databases": [
+    {
+      // This value is the Python attribute name: `env.DB`. Renaming it breaks
+      // every call site.
+      "binding": "DB",
+      "database_name": "linuxdo-oss",
+      // Fill from: npx wrangler d1 create linuxdo-oss
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations",
+      "migrations_table": "d1_migrations"
+    }
+  ],
+
+  // Declaring the required secret makes `wrangler deploy` fail fast when it is
+  // not configured on the Worker, instead of failing at the first LLM call.
+  // Locally it is read from a gitignored `.dev.vars`.
+  "secrets": {
+    "required": ["LLM_API_KEY"]
+  },
+
+  // Non-secret configuration. Secrets (LLM_API_KEY) are set with
+  // `uv run pywrangler secret put LLM_API_KEY` and never live in this file.
+  // Read from Python by ATTRIBUTE only: `env.LLM_BASE_URL`. Subscript access
+  // (`env["LLM_BASE_URL"]`) raises — the env wrapper has no __getitem__.
+  "vars": {
+    "CHANNEL_FEED_URL": "https://rsshub.rssforever.com/telegram/channel/linux_do_channel",
+    "LLM_BASE_URL": "https://api.openai.com/v1",
+    "LLM_MODEL": "REPLACE_WITH_MODEL_ID",
+    "LLM_PROMPT_VERSION": "1",
+    "SYNC_BATCH_SIZE": "20",
+    "HTTP_TIMEOUT_SECONDS": "10",
+    "MAX_RESPONSE_BYTES": "2097152"
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}
