@@ -21,10 +21,11 @@ python_modules/
 .venv-workers/
 
 # Cloudflare — secrets and local state. NEVER commit these.
+# `.env` is canonical. Legacy `.dev.vars` stays ignored so old secrets cannot
+# accidentally enter Git during migration.
 .wrangler/
 .dev.vars
 .dev.vars.*
-!.dev.vars.example
 .env
 .env.*
 !.env.example
