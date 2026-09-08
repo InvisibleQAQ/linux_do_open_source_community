@@ -8,11 +8,11 @@ source:
 
   1. **The prompt** says it (a model told the rule usually follows it).
   2. **The JSON Schema** enforces it — `canonical_url` is an `enum` of the exact
-     candidate URLs. Under `SchemaMode.STRICT` with `responses` or
-     `chat_completions` the sampler cannot emit a token sequence outside an enum;
-     with `anthropic` the schema travels as a forced tool call, which is best
-     effort rather than a grammar (see `llm/anthropic.py`). This is the only guard
-     that can be structural, and the only one a weaker Schema Mode gives up.
+     candidate URLs, and under `SchemaMode.STRICT` the sampler cannot emit a token
+     sequence outside an enum. That holds under all three protocols: each sends
+     its own `strict` flag beside the schema, `anthropic`'s on the forced tool
+     definition (see `llm/anthropic.py`). This is the only guard that can be
+     structural, and the only one a weaker Schema Mode gives up.
   3. **`parse_response`** re-checks it against `allowed_urls` and raises. A custom
      `LLM_BASE_URL` may claim strict-schema support and only partially deliver, so
      the guard that actually protects the database is the one on this side of the

@@ -51,12 +51,13 @@ class LLMProtocol(StrEnum):
 class SchemaMode(StrEnum):
     """How much of the JSON Schema actually reaches the model.
 
-    `STRICT` asks the endpoint to enforce the schema, which under `responses` and
-    `chat_completions` makes the `canonical_url` enum a constraint the sampler
-    cannot violate. Under `anthropic` it is weaker: a forced tool call without
-    Anthropic's separate `strict: true` tool flag is documented as best effort —
-    see the note in `llm/anthropic.py`. The other two modes are for endpoints
-    that reject a schema outright; they move it into the prompt.
+    `STRICT` asks the endpoint to enforce the schema, which makes the
+    `canonical_url` enum a constraint the sampler cannot violate under all three
+    protocols. Each one carries its own `strict` flag beside the schema;
+    `anthropic`'s sits on the forced tool definition, and without it a forced tool
+    call would bind only the field names — see the note in `llm/anthropic.py`. The
+    other two modes are for endpoints that reject a schema outright; they move it
+    into the prompt.
 
     In every case the anti-hallucination guarantee rests on the `allowed_urls`
     re-check in `classifier.py`, which is where it rested anyway. That is why the

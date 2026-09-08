@@ -95,7 +95,7 @@ vLLM / Ollama / LM Studio / 多数中转站只有 `chat/completions`；Gemini �
 
 | 取值 | 含义 |
 |---|---|
-| `strict`（默认） | 端点强制执行 `canonical_url` 的 `enum`。`responses` / `chat_completions` 下采样器越不出去；`anthropic` 下是强制工具调用，只到 best effort（见 `llm/anthropic.py`） |
+| `strict`（默认） | 端点强制执行 `canonical_url` 的 `enum`，采样器越不出去。三协议强度一致：`responses` / `chat_completions` 在 schema 旁发 `strict: true`，`anthropic` 把同一个标志发在强制工具定义上——没有它，强制工具调用只绑定字段名（见 `llm/anthropic.py`） |
 | `json_object` | 只保证是 JSON，schema 改为进 prompt（DeepSeek / ZhiPu 只接受这档） |
 | `none` | 完全不发 output-format 字段（有些端点见到就 400） |
 

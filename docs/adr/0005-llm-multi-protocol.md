@@ -3,6 +3,8 @@
 - 日期：2026-09-08
 - 状态：已接受
 - 相关：`.trellis/tasks/09-08-llm/prd.md`，精确化 `.trellis/tasks/08-31-cloudflare-stack-prd/research/llm-protocol.md`
+- 修订：2026-09-08 追加第 9 条（`.trellis/tasks/09-08-anthropic-strict/prd.md`），
+  关闭原「未被本 ADR 关闭的事」里 anthropic + strict 的 `[UNKNOWN]`
 - 参考实现：`00_favbase` 的 `lib/providers.ts` + `lib/ai/index.ts`
 
 ## 背景
@@ -107,6 +109,28 @@ schema 包装、输出提取、失败/拒答检测），再乘三档 Schema Mode
 `classifier.py` 因此只留"分类业务"：prompt、schema 本体、Decision 模型、
 `allowed_urls` 硬校验、`classify()` 编排。
 
+### 9. `anthropic` 的 STRICT 档发送工具级 `strict: true`
+
+本条关闭原先列在"未被本 ADR 关闭的事"里的那个 `[UNKNOWN]`。
+
+工具定义带上 `strict: true`（与 `name` / `description` / `input_schema` **同级**，
+不在 `tool_choice` 里），仅在 `SchemaMode.STRICT` 下发送。依据三条，都已核实：
+
+- 该标志**已 GA，不需要 beta header**。
+- 它是工具定义的顶层字段，Anthropic 的 grammar-constrained sampling 挂在它上面。
+  不带它的强制工具调用只绑定字段名，对类型与必填项是 best effort。
+- 它要求 schema 满足 `additionalProperties: false` + 全部属性进 `required`。
+  `build_json_schema()` 为 OpenAI strict 而写，两条**已经满足**（可选字段用
+  `{"type": ["string","null"]}` 而不是从 `required` 移除），schema 无需改动。
+
+不发它才是与本 ADR 自相矛盾的选项：第 5 条说"能力由配置声明"，而
+`LLM_SCHEMA_MODE=strict` 就是运维在声明该端点支持严格结构化输出；对三协议之一
+静默打折，正是第 4 条禁止的静默降级。不认这个字段的端点会返回 4xx，由第 7 条的
+`CATEGORY_ENDPOINT_CONFIG` 明确报出——失败可见、可诊断，逃生阀是显式配置
+`json_object` 或 `none`，**不是**去掉标志重试。
+
+因此第 4 条把 `enum` 称为"唯一的结构性约束"现在对三个协议一致成立。
+
 ## 取舍与代价
 
 - 三份适配器 = 三倍的 wire 层维护面。换来的是"配置文件改一行就能换端点"，
@@ -115,18 +139,15 @@ schema 包装、输出提取、失败/拒答检测），再乘三档 Schema Mode
   这是显式选择的代价，不是缺陷。
 - `LLM_PROTOCOL` 与 `LLM_SCHEMA_MODE` 成为公开配置面，日后要改语义就是
   破坏性变更。这是接受 ADR 的代价。
+- 第 9 条的代价：不认工具级 `strict` 的 anthropic 兼容端点，在 STRICT 档会直接 4xx，
+  而不是悄悄拿到一个较弱的保证。这是有意的——显式失败加一次配置改动，换掉一格
+  名不副实的 `strict`。
 
 ## 未被本 ADR 关闭的事
 
 - `[UNKNOWN]` 自定义端点是否真实现 strict `text.format` —— 本 ADR 让它
   **可绕开**（配 `json_object` 档），不等于验证过。
-- **`anthropic` 协议下的 `strict` 档没有结构性约束。** 第 4 条把
-  `build_json_schema()` 的 `enum` 称为"唯一的结构性约束"，这在 `responses` 与
-  `chat_completions` 下成立，在 `anthropic` 下不成立：Anthropic 的
-  grammar-constrained sampling 由工具定义上另一个 `strict: true` 标志控制，
-  不带它的强制工具调用只绑定字段名，对类型与必填项是 best effort。
-  三道防线的分工不变（第 3 道仍然兜底，不会有脏数据），但
-  "`anthropic` + `strict`" 这一格拿到的保证弱于另外两个协议。
-  是否补发 `strict: true` 取决于目标中转站是否认这个字段 —— `[UNKNOWN]`，
-  未验证前不加。见 `backend/src/linuxdo_oss/llm/anthropic.py` 的模块 docstring。
+- `[UNKNOWN]` Anthropic strict 的 schema 关键字限制清单是否与
+  `STRICT_MODE_UNSUPPORTED_KEYWORDS`（OpenAI 的那份）相同。本项目的 schema 已避开
+  该清单上的全部关键字，所以两边都不受影响；没有为此新增第二份清单。
 - `[UNKNOWN]` linux.do 的部署后 Worker 出网 —— 与本 ADR 无关，仍是发布阻塞项。

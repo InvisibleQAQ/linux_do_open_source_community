@@ -6,12 +6,12 @@ Each one is a silent failure if inherited from either sibling adapter:
    header here is simply not authenticated.
 2. A top-level `system` string, not a `role: "system"` message — a system-role
    message is rejected outright.
-3. Structured output as a FORCED tool call, not a response format — and with
-   `tool_choice: auto` the model may answer in prose, at which point the
-   `canonical_url` enum stops even being an instruction. Note that forcing the
-   tool is still weaker than OpenAI strict mode: Anthropic gates its grammar
-   constraint on a separate `strict: true` tool flag this project does not send,
-   so the enum is best effort here and `allowed_urls` is the real guard.
+3. Structured output as a FORCED tool call, not a response format, and it takes
+   TWO fields. `tool_choice` stops the model answering in prose; the tool
+   definition's own top-level `strict: true` is what gates Anthropic's grammar
+   constraint, so without it the `canonical_url` enum would be best effort about
+   types and required fields. Both are asserted, including the placement — a
+   `strict` key inside `tool_choice` would be silently ignored and look fine.
 """
 
 from __future__ import annotations
@@ -101,9 +101,24 @@ def test_strict_mode_forces_one_named_tool():
     assert body["tools"][0]["name"] == "decisions"
     assert body["tools"][0]["input_schema"] == SCHEMA
     assert body["tool_choice"] == {"type": "tool", "name": "decisions"}
-    # There is no `strict` flag in this API, and no response_format either.
+    # This API has no response_format; the schema travels as the tool only.
     assert "response_format" not in body
     assert "text" not in body
+
+
+def test_strict_mode_sends_the_tool_level_strict_flag():
+    """The flag that turns the forced tool call into a grammar rather than a
+    strong request. Without it Anthropic documents types and required fields as
+    best effort, which would make `SchemaMode.STRICT` mean less here than under
+    the other two protocols."""
+    tool = payload()["tools"][0]
+
+    assert tool["strict"] is True
+    # Placement is the part that can silently regress: `strict` is a TOP-LEVEL
+    # field on the tool definition, beside the other three. Inside `tool_choice`
+    # it would be accepted, ignored, and leave the enum unenforced.
+    assert set(tool) == {"name", "description", "input_schema", "strict"}
+    assert "strict" not in payload()["tool_choice"]
 
 
 @pytest.mark.parametrize("schema_mode", [SchemaMode.JSON_OBJECT, SchemaMode.NONE])
@@ -115,6 +130,9 @@ def test_both_degraded_modes_send_a_plain_message(schema_mode):
 
     assert "tools" not in body
     assert "tool_choice" not in body
+    # No `tools` means no place for the tool-level flag either; it must not leak
+    # to the top level of the request as a consolation prize.
+    assert "strict" not in body
     assert body["system"] == "SYSTEM"
 
 

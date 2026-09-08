@@ -38,7 +38,7 @@ The wire protocol the Classifier Endpoint is expected to speak, selected by `LLM
 
 ### Schema Mode
 
-How much of the JSON Schema actually reaches the model, selected by `LLM_SCHEMA_MODE`. `strict` delivers the schema as an enforced constraint, which under `responses` and `chat_completions` makes the `canonical_url` `enum` unreachable to violate; under `anthropic` it is a forced tool call and therefore best effort, because Anthropic's grammar constraint is gated on a separate `strict: true` tool flag this project does not send. `json_object` only asks for valid JSON and moves the schema into the prompt; `none` sends no output-format field at all, for endpoints that reject one.
+How much of the JSON Schema actually reaches the model, selected by `LLM_SCHEMA_MODE`. `strict` delivers the schema as an enforced constraint, making the `canonical_url` `enum` unreachable to violate under all three LLM Protocols: `responses` and `chat_completions` carry `strict: true` beside the schema, and `anthropic` carries the same flag on the forced tool definition, which is what gates its grammar constraint — a forced tool call without it would bind only the field names. `json_object` only asks for valid JSON and moves the schema into the prompt; `none` sends no output-format field at all, for endpoints that reject one.
 
 Degrading the Schema Mode is a configuration decision, never a runtime reaction to a failure: a request that fails is never retried under a weaker mode. Degrading costs more rejected decisions, not corrupted data, because the Published Project guarantee rests on the `allowed_urls` re-check rather than on the schema.
 

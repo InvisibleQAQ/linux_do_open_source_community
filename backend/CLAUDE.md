@@ -48,7 +48,7 @@ backend/src/
     │   ├── json_text.py       # 文本 -> JSON，唯一的宽容点：仅降级档解 markdown 围栏
     │   ├── responses.py       # OpenAI Responses：text.format
     │   ├── chat_completions.py# OpenAI Chat Completions：response_format.json_schema
-    │   └── anthropic.py       # Anthropic Messages：x-api-key + 强制 tool_choice
+    │   └── anthropic.py       # Anthropic Messages：x-api-key + 强制 tool_choice + 工具级 strict
     ├── adapters/              # 运行时适配，可以 import workers / js
     │   └── http.py            # 唯一出网出口：限时 + 限大小
     ├── persistence/           # D1 边界
@@ -119,7 +119,7 @@ uv run ruff check backend/ && uv run ruff format --check backend/
 
 Cloudflare 没有 Python Workers 的测试框架，`@cloudflare/vitest-pool-workers` 是 JS/TS 专用。所以分两层：
 
-**纯层（默认，784 个测试约 1.8 秒，其中 4 个已知失败）** —— 普通 CPython pytest。覆盖 `domain/`、`persistence/read_queries.py` 的 SQL 与游标、`sync.py` 的 SQL 常量、`d1.py` 的上限守卫。D1 是 SQLite，所以表结构约束、幂等、抢占租约、键集分页全部用 stdlib `sqlite3` 跑真实迁移来验证——不需要 Worker。
+**纯层（默认，785 个测试约 1.8 秒，其中 4 个已知失败）** —— 普通 CPython pytest。覆盖 `domain/`、`persistence/read_queries.py` 的 SQL 与游标、`sync.py` 的 SQL 常量、`d1.py` 的上限守卫。D1 是 SQLite，所以表结构约束、幂等、抢占租约、键集分页全部用 stdlib `sqlite3` 跑真实迁移来验证——不需要 Worker。
 
 测试直接 import 代码里的 SQL 常量（如 `from linuxdo_oss.sync import CLAIM_TOPIC_SQL`），不抄副本，避免测试与实现漂移。
 

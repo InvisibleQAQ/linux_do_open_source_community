@@ -88,9 +88,10 @@
   //
   // LLM_SCHEMA_MODE decides how much of the JSON Schema reaches the model:
   //
-  //   strict       enforced by the endpoint; under responses/chat_completions the
-  //                canonical_url enum cannot be violated, under anthropic it is a
-  //                forced tool call and only best effort
+  //   strict       enforced by the endpoint; the canonical_url enum cannot be
+  //                violated under any of the three protocols — anthropic carries
+  //                the same strict flag on its forced tool definition. An endpoint
+  //                that rejects the flag answers 4xx; switch modes deliberately
   //   json_object  JSON guaranteed, schema moves into the prompt (DeepSeek, ZhiPu)
   //   none         no output-format field at all (endpoints that reject one)
   //

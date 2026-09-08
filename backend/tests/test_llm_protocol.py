@@ -246,9 +246,11 @@ def test_strict_mode_delivers_the_schema_structurally(protocol):
         assert payload["response_format"]["json_schema"]["strict"] is True
     else:
         assert payload["tools"][0]["input_schema"] == schema
-        # Without forcing the tool the model may answer in prose and the enum
-        # stops being a constraint.
+        # Two fields, not one. Without forcing the tool the model may answer in
+        # prose; without the tool-level `strict` flag the forced call binds field
+        # names only. Either omission demotes the enum from grammar to request.
         assert payload["tool_choice"] == {"type": "tool", "name": SCHEMA_NAME}
+        assert payload["tools"][0]["strict"] is True
 
 
 @pytest.mark.parametrize("protocol", list(LLMProtocol))

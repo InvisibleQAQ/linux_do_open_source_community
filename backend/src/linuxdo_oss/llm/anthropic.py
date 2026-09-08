@@ -5,7 +5,7 @@
     {"model": ..., "max_tokens": ...,
      "system": <the system prompt, a TOP-LEVEL field>,
      "messages": [{"role": "user", ...}],
-     "tools": [{"name": ..., "input_schema": ...}],
+     "tools": [{"name": ..., "input_schema": ..., "strict": true}],
      "tool_choice": {"type": "tool", "name": ...}}
 
 Three things differ from both OpenAI-style adapters, and each one is a silent
@@ -19,18 +19,27 @@ failure if inherited from them:
    `tool_choice` names one tool whose `input_schema` is the target shape, and the
    reply carries the object in `tool_use.input` already parsed.
 
-   This is WEAKER than the two OpenAI adapters, and the difference is
-   load-bearing. Anthropic gates grammar-constrained sampling on a separate
-   `strict: true` flag on the tool definition; without it a forced tool call
-   binds the field NAMES but is documented as best effort about types and
-   required fields. So under this protocol the `canonical_url` enum is a strong
-   instruction, not a grammar the sampler cannot leave, and `SchemaMode.STRICT`
-   here does not mean quite what it means under `responses`.
+   `SchemaMode.STRICT` therefore needs TWO fields, and the second one is the
+   load-bearing one. `tool_choice` only makes the model call the tool instead of
+   answering in prose; the tool definition's own `strict: true` is what gates
+   grammar-constrained sampling. A forced tool call WITHOUT that flag binds the
+   field NAMES but is documented as best effort about types and required fields,
+   which would leave the `canonical_url` enum a strong instruction rather than a
+   grammar the sampler cannot leave. Both are sent, so STRICT means here exactly
+   what it means under `responses` and `chat_completions`.
 
-   `strict: true` is deliberately not sent yet: `[UNKNOWN]` whether the
-   Anthropic-compatible relays this project actually targets accept the flag or
-   reject the request over it, and this codebase does not guess about wire
-   compatibility. Settle that before adding it.
+   The flag is GA — no beta header — and requires the schema to carry
+   `additionalProperties: false` on every object and every property in
+   `required`. `classifier.build_json_schema` already satisfies both, because
+   OpenAI strict mode demands the same two things, so nothing about the schema
+   is protocol-specific.
+
+   An endpoint that does not recognise the flag answers 4xx, which
+   `CATEGORY_ENDPOINT_CONFIG` reports as a configuration problem naming
+   `LLM_PROTOCOL` / `LLM_BASE_URL` / `LLM_API_KEY`. That is deliberate: the
+   escape hatch is `LLM_SCHEMA_MODE=json_object` or `none`, declared in
+   deployment configuration — never a retry with the flag dropped, which is the
+   silent fallback ADR 0005 forbids.
 
    Either way the database is protected. `_reject_unknown_and_duplicate` in
    `classifier.py` re-checks every URL against `allowed_urls` under every
@@ -115,10 +124,18 @@ def build_payload(
                     "Record one decision per candidate repository. Call this tool exactly once."
                 ),
                 "input_schema": json_schema,
+                # A TOP-LEVEL field on the tool definition, never a key inside
+                # `tool_choice`, and this is the one that switches on
+                # grammar-constrained sampling. Without it a forced tool call binds
+                # the field NAMES only and is best effort about types and required
+                # fields, which would leave the `canonical_url` enum an instruction
+                # instead of a constraint. GA, no beta header.
+                "strict": True,
             }
         ]
-        # Forcing the tool is what makes the schema binding. With `auto` the model
-        # may answer in prose and the enum stops being a constraint.
+        # Forcing the tool is what makes the schema reachable at all. With `auto`
+        # the model may answer in prose and the enum stops being a constraint even
+        # as an instruction.
         payload["tool_choice"] = {"type": "tool", "name": schema_name}
 
     # SchemaMode.JSON_OBJECT and SchemaMode.NONE are the same request here: this
