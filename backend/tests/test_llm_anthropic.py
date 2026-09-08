@@ -22,7 +22,6 @@ from linuxdo_oss.llm import SchemaMode
 from linuxdo_oss.llm.anthropic import (
     ANTHROPIC_VERSION,
     ENDPOINT_SUFFIX,
-    FORBIDDEN_BASE_SUFFIXES,
     auth_headers,
     build_payload,
     extract_structured_output,
@@ -67,9 +66,10 @@ TOOL_USE = {"type": "tool_use", "id": "tu_1", "name": "decisions", "input": {"a"
 
 def test_the_version_lives_in_the_path_so_a_v1_root_is_a_paste_o():
     """The root is `https://api.anthropic.com` with NO `/v1` — the opposite of the
-    OpenAI convention, and the reason this adapter forbids that ending."""
+    OpenAI convention. This adapter declares nothing about it: `/v1` is a path
+    prefix of ENDPOINT_SUFFIX, so `protocol.resolve_base_url` strips it back from
+    that fact alone. See test_llm_protocol.py for the behaviour."""
     assert ENDPOINT_SUFFIX == "/v1/messages"
-    assert FORBIDDEN_BASE_SUFFIXES == ("/v1",)
 
 
 def test_auth_is_x_api_key_plus_a_pinned_version_never_bearer():

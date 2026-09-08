@@ -21,7 +21,7 @@ from linuxdo_oss.llm import (
     SchemaMode,
     parse_protocol,
     parse_schema_mode,
-    validate_base_url,
+    resolve_base_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,13 +122,29 @@ def load_settings(env: object) -> Settings:
         )
 
         # The path suffix is the adapter's to append, so the root must not already
-        # carry one. Checked at startup because the alternative is a 404 five
-        # minutes later, from a cron run. `validate_base_url` names the offending
+        # carry one. A trailing copy of *this* protocol's own endpoint path is
+        # stripped rather than refused: pasting the endpoint URL out of a provider's
+        # documentation is the ordinary way this value gets configured. An ending
+        # owned by another protocol stays a hard failure, because there the wrong
+        # value is LLM_PROTOCOL and stripping it would hide that behind a 404 five
+        # minutes later, from a cron run. `resolve_base_url` names the offending
         # suffix and never the URL — a gateway base URL can carry a key in a query
-        # string.
-        validate_base_url(protocol, base_url)
+        # string. See docs/adr/0006-llm-base-url-normalization.md.
+        root = resolve_base_url(protocol, base_url)
     except ValueError as error:
         raise RuntimeError(str(error)) from error
+
+    if root != base_url:
+        # The result is always a prefix of the input, so the remainder IS the
+        # suffix that went away — which is why `resolve_base_url` needs no second
+        # return value. Logged because a tolerated paste is still a configuration
+        # the operator should see named; the suffix comes from ENDPOINT_SUFFIX, a
+        # bounded set, and the URL itself never appears.
+        logger.warning(
+            "LLM_BASE_URL carried the %r endpoint path of protocol %s; using the API root",
+            base_url[len(root) :],
+            protocol.value,
+        )
 
     if schema_mode is not SchemaMode.STRICT:
         # Degrading is legitimate and configured, never silent: ADR 0005 forbids
@@ -145,7 +161,7 @@ def load_settings(env: object) -> Settings:
 
     return Settings(
         channel_feed_url=_required(env, "CHANNEL_FEED_URL"),
-        llm_base_url=base_url,
+        llm_base_url=root,
         llm_model=_required(env, "LLM_MODEL"),
         llm_api_key=_required(env, "LLM_API_KEY"),
         llm_protocol=protocol,

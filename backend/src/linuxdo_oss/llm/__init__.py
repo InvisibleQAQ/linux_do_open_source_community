@@ -44,7 +44,7 @@ from linuxdo_oss.llm.errors import (
     clamp_token,
 )
 from linuxdo_oss.llm.protocol import (
-    BASE_URL_FORBIDDEN_SUFFIXES,
+    KNOWN_ENDPOINT_TAILS,
     LLMProtocol,
     SchemaMode,
     WireAdapter,
@@ -52,11 +52,10 @@ from linuxdo_oss.llm.protocol import (
     get_adapter,
     parse_protocol,
     parse_schema_mode,
-    validate_base_url,
+    resolve_base_url,
 )
 
 __all__ = [
-    "BASE_URL_FORBIDDEN_SUFFIXES",
     "CATEGORY_CONFIGURATION",
     "CATEGORY_DUPLICATE_DECISION",
     "CATEGORY_ENDPOINT_CONFIG",
@@ -72,6 +71,7 @@ __all__ = [
     "CATEGORY_TRANSPORT",
     "CATEGORY_UNKNOWN_REPOSITORY",
     "ERROR_CATEGORIES",
+    "KNOWN_ENDPOINT_TAILS",
     "ClassifierError",
     "LLMProtocol",
     "SchemaMode",
@@ -81,5 +81,5 @@ __all__ = [
     "get_adapter",
     "parse_protocol",
     "parse_schema_mode",
-    "validate_base_url",
+    "resolve_base_url",
 ]

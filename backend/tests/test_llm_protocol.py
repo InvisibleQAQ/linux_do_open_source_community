@@ -28,13 +28,13 @@ from linuxdo_oss.classifier import (
     parse_response,
 )
 from linuxdo_oss.llm import (
-    BASE_URL_FORBIDDEN_SUFFIXES,
+    KNOWN_ENDPOINT_TAILS,
     LLMProtocol,
     SchemaMode,
     WireAdapter,
     endpoint_url,
     get_adapter,
-    validate_base_url,
+    resolve_base_url,
 )
 
 CANDIDATE = CandidateRepository(
@@ -122,7 +122,6 @@ def test_every_protocol_resolves_to_an_adapter_satisfying_the_contract(protocol)
 
     assert isinstance(adapter, WireAdapter)
     assert adapter.ENDPOINT_SUFFIX.startswith("/")
-    assert isinstance(adapter.FORBIDDEN_BASE_SUFFIXES, tuple)
 
 
 def test_each_protocol_gets_a_distinct_adapter():
@@ -164,26 +163,114 @@ def test_the_enum_values_are_the_spellings_configuration_uses():
 
 
 @pytest.mark.parametrize("protocol", list(LLMProtocol))
-@pytest.mark.parametrize("suffix", BASE_URL_FORBIDDEN_SUFFIXES)
-def test_a_pasted_endpoint_path_is_rejected_for_every_protocol(protocol, suffix):
-    """These endings are wrong everywhere, not only under the protocol that owns
-    them: the suffix is always the adapter's to append."""
-    with pytest.raises(ValueError, match="LLM_BASE_URL"):
-        validate_base_url(protocol, f"https://api.example.com/v1{suffix}")
-
-
-def test_only_anthropic_rejects_a_v1_root():
-    """The asymmetry is the whole reason this check is per-protocol."""
-    validate_base_url(LLMProtocol.RESPONSES, "https://api.openai.com/v1")
-    validate_base_url(LLMProtocol.CHAT_COMPLETIONS, "https://api.openai.com/v1")
-
-    with pytest.raises(ValueError, match="/v1"):
-        validate_base_url(LLMProtocol.ANTHROPIC, "https://api.anthropic.com/v1")
+def test_the_documented_root_for_each_protocol_is_returned_unchanged(protocol):
+    root = BASE_URLS[protocol]
+    assert resolve_base_url(protocol, root) == root
 
 
 @pytest.mark.parametrize("protocol", list(LLMProtocol))
-def test_the_documented_root_for_each_protocol_passes(protocol):
-    validate_base_url(protocol, BASE_URLS[protocol])
+def test_a_paste_of_the_protocols_own_endpoint_is_stripped_back_to_the_root(protocol):
+    """Class A: the ending is one only a paste of *this* endpoint can produce, so
+    the intent is unambiguous and the value is normalised rather than refused."""
+    root = BASE_URLS[protocol]
+    pasted = root + get_adapter(protocol).ENDPOINT_SUFFIX
+
+    assert resolve_base_url(protocol, pasted) == root
+
+
+def test_anthropic_strips_the_v1_root_it_used_to_reject():
+    """The one behaviour that flipped. `/v1` is a path prefix of `/v1/messages`,
+    which is why no per-adapter suffix list is needed to say so."""
+    assert (
+        resolve_base_url(LLMProtocol.ANTHROPIC, "https://api.anthropic.com/v1")
+        == "https://api.anthropic.com"
+    )
+
+
+def test_chat_completions_strips_a_half_pasted_chat_segment():
+    """`/chat` is a path prefix of `/chat/completions`, so it falls out of the same
+    rule. Stripping it and re-appending the suffix reproduces the correct endpoint,
+    which is why it gets no exception carved out for it."""
+    assert (
+        resolve_base_url(LLMProtocol.CHAT_COMPLETIONS, "https://gw.example.com/v1/chat")
+        == "https://gw.example.com/v1"
+    )
+
+
+def test_a_v1_root_is_untouched_under_the_openai_style_protocols():
+    """The asymmetry is the whole reason the rule is per-protocol: `/v1` is a
+    correct root here, and stripping it would break a working configuration."""
+    for protocol in (LLMProtocol.RESPONSES, LLMProtocol.CHAT_COMPLETIONS):
+        assert resolve_base_url(protocol, "https://api.openai.com/v1") == (
+            "https://api.openai.com/v1"
+        )
+
+
+@pytest.mark.parametrize(
+    ("protocol", "tail"),
+    [
+        (protocol, tail)
+        for tail, owner in KNOWN_ENDPOINT_TAILS.items()
+        for protocol in LLMProtocol
+        if owner is not protocol
+    ],
+)
+def test_another_protocols_endpoint_path_is_refused_and_names_that_protocol(protocol, tail):
+    """Class B: the paste is not the mistake, LLM_PROTOCOL is. Stripping it would
+    yield a root that validates and then 404s from a cron run."""
+    owner = KNOWN_ENDPOINT_TAILS[tail]
+
+    with pytest.raises(ValueError, match="LLM_BASE_URL") as caught:
+        resolve_base_url(protocol, f"https://api.example.com/v1{tail}")
+
+    message = str(caught.value)
+    assert owner.value in message
+    assert "LLM_PROTOCOL" in message
+
+
+def test_anthropic_refuses_a_v1_less_messages_path_it_cannot_strip():
+    """`/messages` is anthropic's own ending yet not a prefix of `/v1/messages`, so
+    no strip could produce a correct root. The remedy is deletion, and the message
+    must not suggest switching protocol to the one already selected."""
+    with pytest.raises(ValueError, match="/messages") as caught:
+        resolve_base_url(LLMProtocol.ANTHROPIC, "https://gw.example.com/messages")
+
+    assert "/v1/messages" in str(caught.value)
+
+
+def test_one_strip_only_a_doubled_endpoint_path_still_fails():
+    """Stripping twice would be guessing. One strip, then the map is re-checked."""
+    with pytest.raises(ValueError, match="/responses"):
+        resolve_base_url(LLMProtocol.RESPONSES, "https://gw.example.com/responses/responses")
+
+
+def test_a_strip_may_not_eat_into_the_authority():
+    """`"https://v1".endswith("/v1")` is True, so the naive strip returns `https:/`.
+    This is the boundary the strip itself introduces."""
+    with pytest.raises(ValueError, match="no host"):
+        resolve_base_url(LLMProtocol.ANTHROPIC, "https://v1")
+
+
+@pytest.mark.parametrize("trailing", ["", "/", "///"])
+@pytest.mark.parametrize("protocol", list(LLMProtocol))
+def test_trailing_slashes_change_neither_the_strip_nor_the_root(protocol, trailing):
+    root = BASE_URLS[protocol]
+    pasted = root + get_adapter(protocol).ENDPOINT_SUFFIX + trailing
+
+    assert resolve_base_url(protocol, pasted) == root
+    assert resolve_base_url(protocol, root + trailing) == root
+
+
+@pytest.mark.parametrize("protocol", list(LLMProtocol))
+def test_no_base_url_message_ever_echoes_the_host(protocol):
+    """A gateway base URL can carry a key in a query string, so the rule is
+    absolute for every rejection path in this function."""
+    host = "secret-host.example.com"
+
+    for bad in (f"https://{host}/v1?token=k", f"https://{host}/v1#f"):
+        with pytest.raises(ValueError) as caught:
+            resolve_base_url(protocol, bad)
+        assert host not in str(caught.value)
 
 
 # ----------------------------------------------------------------------

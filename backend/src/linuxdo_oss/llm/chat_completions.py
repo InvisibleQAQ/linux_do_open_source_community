@@ -41,17 +41,12 @@ from linuxdo_oss.llm.protocol import SchemaMode
 
 __all__ = [
     "ENDPOINT_SUFFIX",
-    "FORBIDDEN_BASE_SUFFIXES",
     "auth_headers",
     "build_payload",
     "extract_structured_output",
 ]
 
 ENDPOINT_SUFFIX = "/chat/completions"
-
-# Nothing beyond the shared set: an OpenAI-style root conventionally ends in
-# `/v1`, so that ending is correct here rather than wrong.
-FORBIDDEN_BASE_SUFFIXES: tuple[str, ...] = ()
 
 
 def auth_headers(api_key: str) -> dict[str, str]:

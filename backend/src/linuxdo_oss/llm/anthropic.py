@@ -48,8 +48,9 @@ failure if inherited from them:
 
 The base URL convention is also the opposite of OpenAI's: the root is
 `https://api.anthropic.com` with NO `/v1`, because the version sits in the path
-this module appends. `FORBIDDEN_BASE_SUFFIXES` catches the paste-o that would
-otherwise produce `/v1/v1/messages`.
+this module appends. A configured root that still carries `/v1` is stripped back
+by `protocol.resolve_base_url` rather than rejected — `/v1` is a path prefix of
+`ENDPOINT_SUFFIX`, so the rule needs no declaration here.
 """
 
 from __future__ import annotations
@@ -71,18 +72,12 @@ from linuxdo_oss.llm.protocol import SchemaMode
 __all__ = [
     "ANTHROPIC_VERSION",
     "ENDPOINT_SUFFIX",
-    "FORBIDDEN_BASE_SUFFIXES",
     "auth_headers",
     "build_payload",
     "extract_structured_output",
 ]
 
 ENDPOINT_SUFFIX = "/v1/messages"
-
-# The version lives in ENDPOINT_SUFFIX, so a root that already ends in `/v1` is
-# the one paste-o that produces `/v1/v1/messages` — a 404 that reads like a
-# network problem. Caught at startup by `protocol.validate_base_url`.
-FORBIDDEN_BASE_SUFFIXES: tuple[str, ...] = ("/v1",)
 
 # Pinned, not tracked. The Messages API requires this header and treats it as the
 # contract for the response shape this module parses; following the newest version

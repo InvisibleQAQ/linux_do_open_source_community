@@ -29,15 +29,24 @@ which appends the selected protocol's own path suffix.
 | Production | Wrangler secret | `wrangler.jsonc` `vars` |
 
 `LLM_BASE_URL` is the **Classifier Endpoint**: an API root, never a full endpoint
-path (see `CONTEXT.md`). It must start with `https://`, must not contain `?` or
-`#`, and must not end with a path the adapter appends. The `/v1` convention is
-per-protocol, and `validate_base_url` enforces the difference:
+path (see `CONTEXT.md`). It must start with `https://` and must not contain `?` or
+`#`. `resolve_base_url` derives the root from the configured value, and the two
+kinds of trailing endpoint path are treated oppositely:
+
+- a path prefix of **this** protocol's own `ENDPOINT_SUFFIX` is **stripped**, with
+  one WARNING per Sync Run. Pasting the endpoint URL out of a provider's docs is
+  the ordinary way this value gets configured and the intent is unambiguous.
+- **another** protocol's endpoint path is **refused**. There the wrong value is
+  `LLM_PROTOCOL`, and stripping it would produce a root that validates and then
+  404s from a cron run. See `docs/adr/0006-llm-base-url-normalization.md`.
+
+The `/v1` convention is per-protocol:
 
 | `LLM_PROTOCOL` | endpoint | root |
 |----------------|----------|------|
-| `responses` (default) | `{base}/responses` | conventionally ends `/v1` |
-| `chat_completions` | `{base}/chat/completions` | conventionally ends `/v1` |
-| `anthropic` | `{base}/v1/messages` | must **not** end `/v1`; auth is `x-api-key` |
+| `responses` (default) | `{base}/responses` | conventionally ends `/v1`, kept as-is |
+| `chat_completions` | `{base}/chat/completions` | conventionally ends `/v1`, kept as-is |
+| `anthropic` | `{base}/v1/messages` | carries no `/v1`; a trailing `/v1` is stripped. Auth is `x-api-key` |
 
 `LLM_SCHEMA_MODE` is `strict` (default), `json_object` or `none`. Anything but
 `strict` logs one WARNING per run and gives up the structural `enum` guard; the
@@ -69,8 +78,10 @@ ignores `.env` when `.dev.vars` exists.
 |-----------|--------|
 | Any required value is absent or blank | `load_settings` raises `RuntimeError` |
 | `LLM_BASE_URL` is not `https://` | `load_settings` raises `RuntimeError`; `classify` re-checks and raises a non-retryable `ClassifierError` |
-| `LLM_BASE_URL` ends with `/responses`, `/chat/completions` or `/messages` | `load_settings` raises `RuntimeError` naming the suffix, never the URL |
-| `LLM_BASE_URL` ends with `/v1` and `LLM_PROTOCOL=anthropic` | `load_settings` raises `RuntimeError` (would build `/v1/v1/messages`) |
+| `LLM_BASE_URL` ends with a path prefix of **this** protocol's `ENDPOINT_SUFFIX` | Stripped to the root; one WARNING per Sync Run carrying the suffix and the protocol name, never the URL |
+| `LLM_BASE_URL` ends with **another** protocol's endpoint path | `load_settings` raises `RuntimeError` naming both protocols and the suffix, never the URL |
+| `LLM_BASE_URL` ends with `/messages` and `LLM_PROTOCOL=anthropic` | `load_settings` raises `RuntimeError`: anthropic's own ending, but not a prefix of `/v1/messages`, so no strip yields a correct root |
+| Stripping would eat the host (`https://v1` under `anthropic`) | `load_settings` raises `RuntimeError`; the strip is not allowed to break the authority |
 | `LLM_BASE_URL` contains `?` or `#` | `load_settings` raises `RuntimeError`; a path suffix cannot be appended after a query string |
 | `LLM_PROTOCOL` / `LLM_SCHEMA_MODE` unrecognised | `load_settings` raises `RuntimeError` listing the accepted values. **Never defaults** |
 | `LLM_SCHEMA_MODE` is not `strict` | One WARNING per run, carrying the mode name only |
@@ -83,14 +94,17 @@ ignores `.env` when `.dev.vars` exists.
 
 - Good: copy `.env.example` to `.env`, replace every placeholder, start locally.
 - Good: `LLM_PROTOCOL=anthropic` with `LLM_BASE_URL=https://api.anthropic.com`.
+- Base: the provider's full endpoint URL pasted under the matching protocol —
+  tolerated, stripped to the root, one WARNING. Not an error, but not silent either.
 - Base: read-only API routes may start without LLM configuration, but scheduled sync
   must reject missing configuration.
 - Base: an endpoint that rejects a strict schema is configured with
   `LLM_SCHEMA_MODE=json_object`, deliberately and visibly.
 - Bad: put `LLM_API_KEY` in `wrangler.jsonc`, `.env.example`, logs, or committed docs.
-- Bad: set `LLM_BASE_URL` to `http://...`, to a full endpoint path, or to a URL
-  carrying a query string.
-- Bad: `LLM_PROTOCOL=anthropic` with `LLM_BASE_URL=https://api.anthropic.com/v1`.
+- Bad: set `LLM_BASE_URL` to `http://...` or to a URL carrying a query string.
+- Bad: `LLM_PROTOCOL=responses` with `LLM_BASE_URL=.../v1/chat/completions` — the
+  protocol is what is wrong, and this is refused rather than quietly stripped.
+- Bad: strip a suffix without logging it, or strip one belonging to another protocol.
 - Bad: add a runtime probe, or retry a failed request under a weaker schema mode.
 - Bad: drop `anthropic`'s tool-level `strict` flag after a 4xx — that is the same
   silent fallback, and it makes `strict` mean something different per protocol.
@@ -99,8 +113,9 @@ ignores `.env` when `.dev.vars` exists.
 
 - `backend/tests/test_config.py` covers `load_settings` end to end: missing and
   blank values, both enums (defaults, every accepted value, every rejection), every
-  base-URL shape rule, and that the degraded-mode WARNING carries the mode name and
-  nothing else.
+  base-URL shape rule, both directions of the suffix split (stripped vs refused), and
+  that the degraded-mode and stripped-suffix WARNINGs each carry their bounded names
+  and nothing else.
 - Every failure must surface as `RuntimeError`, not `ValueError`: that is the type
   `run_sync` catches around `load_settings`, and anything else escapes a function
   that promises never to raise.

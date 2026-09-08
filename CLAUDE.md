@@ -90,15 +90,21 @@ uv run pywrangler secret put LLM_API_KEY
 
 ### LLM 三协议（`LLM_PROTOCOL`）
 
-协议由配置选择，**绝不运行时探测**。每个协议自己往 `LLM_BASE_URL` 后面拼路径后缀，
-所以 `LLM_BASE_URL` 必须是 API **根**：`https://` 开头、不含 `?` 或 `#`、不带端点路径。
-`/v1` 的惯例按协议不同，两类错误都由 `config.py` 在启动时拒绝：
+协议由配置选择，**绝不运行时探测**。每个协议自己往 API 根后面拼路径后缀，
+所以 `LLM_BASE_URL` 必须是 `https://` 开头、不含 `?` 或 `#`。`/v1` 惯例按协议不同：
 
 | `LLM_PROTOCOL` | 端点 | base 根 |
 |---|---|---|
-| `responses`（默认） | `{base}/responses` | 惯例带 `/v1` |
-| `chat_completions` | `{base}/chat/completions` | 惯例带 `/v1` |
-| `anthropic` | `{base}/v1/messages` | **不带** `/v1`，鉴权头是 `x-api-key` |
+| `responses`（默认） | `{base}/responses` | 惯例带 `/v1`，原样保留 |
+| `chat_completions` | `{base}/chat/completions` | 惯例带 `/v1`，原样保留 |
+| `anthropic` | `{base}/v1/messages` | **不带** `/v1`，多写的 `/v1` 会被剥掉；鉴权头是 `x-api-key` |
+
+末尾多写了端点路径时，`llm/protocol.py::resolve_base_url` 按**归属**分两路 ——
+后缀属于当前协议自己的（是它 `ENDPOINT_SUFFIX` 的路径前缀）就剥掉，`config.py`
+每次 Sync Run 打一条 WARNING；属于**别的**协议就在启动时拒绝，因为那种情况配错的
+是 `LLM_PROTOCOL` 而不是 URL，剥掉只会把失败推迟到五分钟后的 cron 里。
+判据从 `ENDPOINT_SUFFIX` 推导，所以适配器不再各自声明禁用后缀。
+见 `docs/adr/0006-llm-base-url-normalization.md`。
 
 vLLM / Ollama / LM Studio / 多数中转站只有 `chat/completions`；Gemini 走它的 OpenAI
 兼容层（`/v1beta/openai`），因此本项目不实现 Gemini 原生协议。

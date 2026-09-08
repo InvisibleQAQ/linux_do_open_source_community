@@ -22,7 +22,7 @@ from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
-    "BASE_URL_FORBIDDEN_SUFFIXES",
+    "KNOWN_ENDPOINT_TAILS",
     "LLMProtocol",
     "SchemaMode",
     "WireAdapter",
@@ -30,7 +30,7 @@ __all__ = [
     "get_adapter",
     "parse_protocol",
     "parse_schema_mode",
-    "validate_base_url",
+    "resolve_base_url",
 ]
 
 
@@ -82,10 +82,11 @@ class WireAdapter(Protocol):
     living only in three files that are expected to agree.
     """
 
-    #: Appended to the configured API root to reach the endpoint.
+    #: Appended to the configured API root to reach the endpoint. Also the sole
+    #: source of the endings `resolve_base_url` strips: every non-empty path
+    #: prefix of this value is an ending only a paste of *this* protocol's own
+    #: endpoint can produce, so no protocol declares a suffix list of its own.
     ENDPOINT_SUFFIX: str
-    #: Base-URL endings that are wrong *for this protocol specifically*.
-    FORBIDDEN_BASE_SUFFIXES: tuple[str, ...]
 
     def auth_headers(self, api_key: str) -> dict[str, str]: ...
 
@@ -104,11 +105,18 @@ class WireAdapter(Protocol):
     def extract_structured_output(self, raw: dict[str, Any], schema_mode: SchemaMode) -> Any: ...
 
 
-# Endings that mean the operator pasted a full endpoint path into what must be an
-# API *root*. Wrong under every protocol, because the suffix is the adapter's job:
-# left alone they produce `/responses/responses` and a 404 that reads like a
-# network problem.
-BASE_URL_FORBIDDEN_SUFFIXES = ("/responses", "/chat/completions", "/messages")
+# Every endpoint ending this project recognises, mapped to the protocol that owns
+# it. Hand-written rather than gathered from the three adapters: reading
+# `ENDPOINT_SUFFIX` off all of them would import all three, and `get_adapter`
+# imports lazily precisely to avoid paying startup cost for the two that never run.
+#
+# `/messages` and not `/v1/messages`, because the shorter ending also catches the
+# longer one and additionally catches a gateway that mounts Messages without `/v1`.
+KNOWN_ENDPOINT_TAILS: dict[str, LLMProtocol] = {
+    "/responses": LLMProtocol.RESPONSES,
+    "/chat/completions": LLMProtocol.CHAT_COMPLETIONS,
+    "/messages": LLMProtocol.ANTHROPIC,
+}
 
 
 def get_adapter(protocol: LLMProtocol) -> WireAdapter:
@@ -133,12 +141,40 @@ def endpoint_url(protocol: LLMProtocol, base_url: str) -> str:
     return f"{base_url.rstrip('/')}{get_adapter(protocol).ENDPOINT_SUFFIX}"
 
 
-def validate_base_url(protocol: LLMProtocol, base_url: str) -> None:
-    """Raise if the configured root cannot produce a correct endpoint URL.
+def _own_endpoint_tails(endpoint_suffix: str) -> tuple[str, ...]:
+    """`endpoint_suffix`'s non-empty path prefixes, longest first.
 
-    Called from `config.py` at startup, so a paste-o fails once and loudly with a
-    message naming the rule — rather than as a 404 five minutes later, from a cron
-    run, in a category that used to be indistinguishable from a timeout.
+    `/responses` -> `/responses`; `/chat/completions` -> `/chat/completions`,
+    `/chat`; `/v1/messages` -> `/v1/messages`, `/v1`.
+
+    These are exactly the endings that only a paste of *this* protocol's own
+    endpoint can produce, which is why they are the ones `resolve_base_url` may
+    strip. Deriving them is also what retires the per-adapter suffix lists:
+    `anthropic` needed one solely because `/v1` is a prefix of `/v1/messages`, and
+    that now follows from the rule instead of being restated beside it.
+
+    Longest first, so `/chat/completions` is consumed whole rather than matching
+    `/chat` and leaving a stray `/completions` behind.
+    """
+    segments = endpoint_suffix.strip("/").split("/")
+    return tuple("/" + "/".join(segments[:count]) for count in range(len(segments), 0, -1))
+
+
+def resolve_base_url(protocol: LLMProtocol, base_url: str) -> str:
+    """The API root `base_url` denotes, or `ValueError` if it denotes none.
+
+    A trailing copy of *this* protocol's own endpoint path is removed, because
+    pasting the endpoint URL out of a provider's documentation is the ordinary way
+    this value gets configured and the intent is then unambiguous. The result is
+    always a prefix of the stripped input, so a caller that wants to report what
+    went away can subtract it — that is how `config.py` names the suffix in its
+    WARNING without this function needing a second return value.
+
+    An ending owned by a *different* protocol is refused instead. There the paste
+    is not the mistake, `LLM_PROTOCOL` is, and stripping it would produce a root
+    that validates and then 404s from a cron run five minutes later — the
+    diagnosability defect ADR 0005 exists to remove. See
+    `docs/adr/0006-llm-base-url-normalization.md`.
 
     No message here echoes the URL, only the rule it broke: a gateway base URL can
     carry a key in a query string, and the logging spec is absolute about
@@ -159,15 +195,50 @@ def validate_base_url(protocol: LLMProtocol, base_url: str) -> None:
                 f"string or fragment cannot be preserved"
             )
 
-    normalized = base_url.rstrip("/")
+    root = base_url.rstrip("/")
 
-    for suffix in (*BASE_URL_FORBIDDEN_SUFFIXES, *adapter.FORBIDDEN_BASE_SUFFIXES):
-        if normalized.endswith(suffix):
+    for tail in _own_endpoint_tails(adapter.ENDPOINT_SUFFIX):
+        if not root.endswith(tail):
+            continue
+
+        root = root[: -len(tail)]
+
+        # `"https://v1".endswith("/v1")` is True, so a strip can eat into the
+        # authority and leave `https:/`. Checked here and only here, because this
+        # is the one failure the strip itself introduces; the `https://` rule
+        # stays in `config.py`, which owns it and has its own message for it.
+        if not root.partition("://")[2]:
             raise ValueError(
-                f"LLM_BASE_URL must be an API root, not a full endpoint path: "
-                f"remove the trailing {suffix!r} "
-                f"(protocol {protocol.value} appends {adapter.ENDPOINT_SUFFIX!r} itself)"
+                f"LLM_BASE_URL is not a usable API root: removing the trailing "
+                f"{tail!r} leaves no host"
             )
+
+        break
+
+    # Matched against the map *after* the strip, deliberately: one strip is all
+    # this function does. An ending still standing here is the wrong protocol or a
+    # genuinely malformed value, and both are worth failing loudly for rather than
+    # guessing at a second time.
+    for tail, owner in KNOWN_ENDPOINT_TAILS.items():
+        if not root.endswith(tail):
+            continue
+
+        if owner is protocol:
+            # `/messages` under `anthropic` lands here: the ending is this
+            # protocol's own, yet not a prefix of `/v1/messages`, so no strip could
+            # have produced a correct root. There is nothing to suggest but
+            # deleting it.
+            remedy = f"remove it — {protocol.value} appends {adapter.ENDPOINT_SUFFIX!r} itself"
+        else:
+            remedy = (
+                f"it is the endpoint path of protocol {owner.value} while "
+                f"LLM_PROTOCOL is {protocol.value}, so either remove it or set "
+                f"LLM_PROTOCOL={owner.value}"
+            )
+
+        raise ValueError(f"LLM_BASE_URL must be an API root but ends in {tail!r}: {remedy}")
+
+    return root
 
 
 def parse_protocol(value: object) -> LLMProtocol:
@@ -195,5 +266,5 @@ def _parse_enum(enum_type: Any, value: object, name: str) -> Any:
         # The value IS echoed here, and only here: it is an enum spelling the
         # operator typed, truncated, and never a secret — whereas a message that
         # only said "invalid" would send them hunting. Contrast
-        # `validate_base_url`, which must not echo its input at all.
+        # `resolve_base_url`, which must not echo its input at all.
         raise ValueError(f"{name} must be one of: {allowed} (got {text[:40]!r})") from None

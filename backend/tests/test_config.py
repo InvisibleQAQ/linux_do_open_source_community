@@ -126,25 +126,34 @@ def test_an_unrecognised_value_aborts_instead_of_defaulting(variable, value):
 
 
 @pytest.mark.parametrize(
-    ("protocol", "base_url"),
+    ("protocol", "base_url", "root"),
     [
-        (LLMProtocol.RESPONSES, "https://api.openai.com/v1/responses"),
-        (LLMProtocol.CHAT_COMPLETIONS, "https://api.openai.com/v1/chat/completions"),
-        (LLMProtocol.ANTHROPIC, "https://api.anthropic.com/v1/messages"),
-        # The paste-o that only anthropic suffers: its suffix already carries /v1,
-        # so this would build https://api.anthropic.com/v1/v1/messages.
-        (LLMProtocol.ANTHROPIC, "https://api.anthropic.com/v1"),
+        (LLMProtocol.RESPONSES, "https://api.openai.com/v1/responses", "https://api.openai.com/v1"),
+        (
+            LLMProtocol.CHAT_COMPLETIONS,
+            "https://api.openai.com/v1/chat/completions",
+            "https://api.openai.com/v1",
+        ),
+        (
+            LLMProtocol.ANTHROPIC,
+            "https://api.anthropic.com/v1/messages",
+            "https://api.anthropic.com",
+        ),
+        # The paste-o that only anthropic suffers: its suffix already carries /v1.
+        # It used to abort; ADR 0006 strips it back instead.
+        (LLMProtocol.ANTHROPIC, "https://api.anthropic.com/v1", "https://api.anthropic.com"),
     ],
 )
-def test_a_full_endpoint_path_in_the_base_url_is_rejected_at_startup(protocol, base_url):
-    with pytest.raises(RuntimeError) as caught:
-        load_settings(make_env(LLM_PROTOCOL=protocol.value, LLM_BASE_URL=base_url))
+def test_a_paste_of_the_protocols_own_endpoint_resolves_to_the_root(protocol, base_url, root):
+    settings = load_settings(make_env(LLM_PROTOCOL=protocol.value, LLM_BASE_URL=base_url))
 
-    assert "LLM_BASE_URL" in str(caught.value)
+    assert settings.llm_base_url == root
 
 
-def test_the_base_url_rejection_names_the_suffix_and_not_the_url():
-    with pytest.raises(RuntimeError) as caught:
+def test_a_stripped_suffix_warns_with_the_suffix_and_the_protocol_only(caplog):
+    """Tolerated, never silent — and the WARNING obeys the same rule as the
+    rejections: the suffix and the protocol name, never the URL."""
+    with caplog.at_level(logging.WARNING, logger="linuxdo_oss.config"):
         load_settings(
             make_env(
                 LLM_PROTOCOL="chat_completions",
@@ -152,9 +161,51 @@ def test_the_base_url_rejection_names_the_suffix_and_not_the_url():
             )
         )
 
-    message = str(caught.value)
+    records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(records) == 1
+
+    message = records[0].getMessage()
     assert "/chat/completions" in message
+    assert "chat_completions" in message
     assert "gw.example.com" not in message
+    assert API_KEY not in message
+
+
+def test_a_root_that_needs_no_strip_stays_silent(caplog):
+    """The common case must not add a line to every cron run's log."""
+    with caplog.at_level(logging.WARNING, logger="linuxdo_oss.config"):
+        settings = load_settings(make_env(LLM_BASE_URL="https://api.openai.com/v1"))
+
+    assert settings.llm_base_url == "https://api.openai.com/v1"
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.parametrize(
+    ("protocol", "base_url", "owner"),
+    [
+        (LLMProtocol.RESPONSES, "https://gw.example.com/v1/chat/completions", "chat_completions"),
+        (LLMProtocol.RESPONSES, "https://gw.example.com/v1/messages", "anthropic"),
+        (LLMProtocol.CHAT_COMPLETIONS, "https://gw.example.com/v1/responses", "responses"),
+        (LLMProtocol.ANTHROPIC, "https://gw.example.com/v1/responses", "responses"),
+    ],
+)
+def test_another_protocols_endpoint_path_still_aborts_at_startup(protocol, base_url, owner):
+    """Class B. Stripping this would hide a wrong LLM_PROTOCOL behind a 404 raised
+    five minutes later, from a cron run."""
+    with pytest.raises(RuntimeError) as caught:
+        load_settings(make_env(LLM_PROTOCOL=protocol.value, LLM_BASE_URL=base_url))
+
+    message = str(caught.value)
+    assert "LLM_BASE_URL" in message
+    assert owner in message
+    assert "gw.example.com" not in message
+
+
+def test_a_strip_that_would_eat_the_host_aborts_as_a_runtime_error():
+    """`"https://v1".endswith("/v1")` is True. The failure the strip introduces must
+    still leave config.py as RuntimeError, not ValueError."""
+    with pytest.raises(RuntimeError, match="no host"):
+        load_settings(make_env(LLM_PROTOCOL="anthropic", LLM_BASE_URL="https://v1"))
 
 
 @pytest.mark.parametrize("character", ["?", "#"])
@@ -172,13 +223,17 @@ def test_a_base_url_with_a_query_string_or_fragment_is_refused(character):
 
 
 @pytest.mark.parametrize("trailing", ["", "/", "///"])
-def test_trailing_slashes_do_not_defeat_the_suffix_check(trailing):
-    with pytest.raises(RuntimeError):
-        load_settings(make_env(LLM_BASE_URL=f"https://api.openai.com/v1/responses{trailing}"))
+def test_trailing_slashes_do_not_defeat_the_strip(trailing):
+    settings = load_settings(
+        make_env(LLM_BASE_URL=f"https://api.openai.com/v1/responses{trailing}")
+    )
+
+    assert settings.llm_base_url == "https://api.openai.com/v1"
 
 
-def test_a_v1_root_is_correct_for_the_openai_style_protocols():
-    """The rule is per-protocol: `/v1` is right here and wrong for anthropic."""
+def test_a_v1_root_is_correct_and_untouched_for_the_openai_style_protocols():
+    """The rule is per-protocol: `/v1` is a root here and a strippable prefix for
+    anthropic. Stripping it here would break a working deployment."""
     for protocol in (LLMProtocol.RESPONSES, LLMProtocol.CHAT_COMPLETIONS):
         settings = load_settings(
             make_env(LLM_PROTOCOL=protocol.value, LLM_BASE_URL="https://api.openai.com/v1")

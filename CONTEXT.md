@@ -28,7 +28,9 @@ A Project candidate that the LLM classified as `include` using only an explicit 
 
 ### Classifier Endpoint
 
-The single HTTPS API **root** configured by `LLM_BASE_URL` that the classifier talks to. It is a root, never a full endpoint path — the path suffix is decided by the LLM Protocol, not by configuration. Compatibility with the configured protocol is a required capability, never a provider-name assumption.
+The single HTTPS API **root** derived from `LLM_BASE_URL` that the classifier talks to. It is a root, never a full endpoint path — the path suffix is decided by the LLM Protocol, not by configuration. Compatibility with the configured protocol is a required capability, never a provider-name assumption.
+
+"Derived from" rather than "configured by": the configured value may carry the endpoint path of *its own* protocol, which is stripped to reach the root and reported by one WARNING per Sync Run. Carrying *another* protocol's endpoint path is a rejected configuration — it means the LLM Protocol is the wrong one, and stripping it would hide that. See `docs/adr/0006-llm-base-url-normalization.md`.
 
 Supersedes the earlier term "Responses-Compatible Endpoint", which assumed a single protocol. See `docs/adr/0005-llm-multi-protocol.md`.
 
