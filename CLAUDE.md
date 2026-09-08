@@ -60,6 +60,9 @@ uv run pywrangler dev    # :8787
 uv run pywrangler deploy
 curl "http://localhost:8787/cdn-cgi/handler/scheduled"   # 本地触发 cron
 
+# 本地 LLM 配置（只用 .env；不要同时保留 .dev.vars）
+cp .env.example .env     # 然后填写 LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
+
 # D1
 npx wrangler d1 create linuxdo-oss                    # 把返回的 id 填进 wrangler.jsonc
 npx wrangler d1 migrations apply linuxdo-oss --local
@@ -68,6 +71,39 @@ npx wrangler d1 migrations apply linuxdo-oss --remote
 # 密钥（绝不进仓库）
 uv run pywrangler secret put LLM_API_KEY
 ```
+
+本地 LLM 配置全部从根目录 `.env` 读取（覆盖 `wrangler.jsonc` `vars` 的同名值）。
+线上配置分开管理：`LLM_API_KEY` 使用 Wrangler secret，其余全部使用 `wrangler.jsonc` 的 `vars`。
+如果旧的 `.dev.vars` 仍存在，Wrangler 会忽略 `.env`；先迁移内容并删除旧文件。
+
+### LLM 三协议（`LLM_PROTOCOL`）
+
+协议由配置选择，**绝不运行时探测**。每个协议自己往 `LLM_BASE_URL` 后面拼路径后缀，
+所以 `LLM_BASE_URL` 必须是 API **根**：`https://` 开头、不含 `?` 或 `#`、不带端点路径。
+`/v1` 的惯例按协议不同，两类错误都由 `config.py` 在启动时拒绝：
+
+| `LLM_PROTOCOL` | 端点 | base 根 |
+|---|---|---|
+| `responses`（默认） | `{base}/responses` | 惯例带 `/v1` |
+| `chat_completions` | `{base}/chat/completions` | 惯例带 `/v1` |
+| `anthropic` | `{base}/v1/messages` | **不带** `/v1`，鉴权头是 `x-api-key` |
+
+vLLM / Ollama / LM Studio / 多数中转站只有 `chat/completions`；Gemini 走它的 OpenAI
+兼容层（`/v1beta/openai`），因此本项目不实现 Gemini 原生协议。
+
+### Schema 降级（`LLM_SCHEMA_MODE`）
+
+| 取值 | 含义 |
+|---|---|
+| `strict`（默认） | 端点强制执行 `canonical_url` 的 `enum`。`responses` / `chat_completions` 下采样器越不出去；`anthropic` 下是强制工具调用，只到 best effort（见 `llm/anthropic.py`） |
+| `json_object` | 只保证是 JSON，schema 改为进 prompt（DeepSeek / ZhiPu 只接受这档） |
+| `none` | 完全不发 output-format 字段（有些端点见到就 400） |
+
+非 `strict` 每轮都打一条 WARNING。**禁止运行时自动回退**：请求失败就是失败，不改档重试。
+降级不产生脏数据——编造的仓库仍被 `_reject_unknown_and_duplicate()` 硬拦，代价只是被拒的
+decision 变多。理由见 `docs/adr/0005-llm-multi-protocol.md`。
+
+wire 层在 `backend/src/linuxdo_oss/llm/`，一个协议一个模块；`classifier.py` 只管分类业务。
 
 ---
 
@@ -101,6 +137,9 @@ uv run pywrangler secret put LLM_API_KEY
   ```
 
   部署后的 Worker 若仍返回 `Just a moment...`，说明 Cloudflare Worker egress 被 linux.do 真实拦截——这是应用代码无法绕过的阻塞项。
-- `[UNKNOWN]` 自定义 LLM 端点是否真的实现了 Responses API 的 strict `text.format` 结构化输出。必须有能力探测，不允许静默回退到 Chat Completions。
+- `[UNKNOWN]` 自定义 LLM 端点是否真的实现了 strict 结构化输出。**这一项现在可以绕开，但没有被验证。**
+  ADR 0005 的结论是不做运行时能力探测（Worker 无状态，探测结果无处缓存，且"探测失败就换档"正是被禁止的静默回退）；
+  端点不支持 strict 时，把 `LLM_SCHEMA_MODE` 配成 `json_object` 或 `none` 即可，防幻觉保证不变。
+  部署前仍应人工验证一次真实端点的行为，并据此把档位写进配置。
 
 顺带一个实测数字：Python Worker 本地冷启动前两次请求耗时 **27.6 s / 25.0 s**，热请求 551 ms / 832 ms。这正是把 `assets.run_worker_first` 限定在 `/api/*` 的理由——让普通页面访问完全不碰 Python。

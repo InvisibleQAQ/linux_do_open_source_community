@@ -109,8 +109,13 @@ async def run_sync(env: Any) -> None:
     try:
         settings = load_settings(env)
     except RuntimeError:
-        # Configuration errors are logged as a category, never with values —
-        # a misconfigured LLM_API_KEY must not end up in the log.
+        # `logger.exception` also emits the exception message, so what
+        # `load_settings` is allowed to put in one is what gets logged here.
+        # Today that is: the offending variable's NAME, the accepted values, the
+        # base-URL rule that was broken, and — only for LLM_PROTOCOL and
+        # LLM_SCHEMA_MODE — the rejected spelling itself, truncated. Never a URL,
+        # a model id or a key. Widening a message in `config.py` widens this log
+        # line; see `.trellis/spec/backend/logging-guidelines.md`.
         logger.exception("sync aborted: invalid configuration")
         return
 
@@ -129,7 +134,8 @@ async def _run(db: Any, settings: Settings) -> None:
         "  1. linuxdo_oss.feeds.channel  — read CHANNEL_FEED_URL, extract topic ids\n"
         "  2. linuxdo_oss.feeds.topic    — read one topic RSS, select first post + "
         "GitHub-bearing replies\n"
-        "  3. linuxdo_oss.classifier     — Responses-API adapter, candidate allowlist\n"
+        "  3. linuxdo_oss.classifier     — DONE. call classify(fetch_text, settings=...); "
+        "the protocol and schema mode come off Settings\n"
         "  4. linuxdo_oss.persistence.write_repository — batch() upserts\n"
         "\n"
         "The claim/lease and counter machinery above is already fixed and verified; "

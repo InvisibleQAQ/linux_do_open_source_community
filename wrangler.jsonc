@@ -67,17 +67,41 @@
 
   // Declaring the required secret makes `wrangler deploy` fail fast when it is
   // not configured on the Worker, instead of failing at the first LLM call.
-  // Locally it is read from a gitignored `.dev.vars`.
+  // Locally it is read from a gitignored `.env`; see `.env.example`.
   "secrets": {
     "required": ["LLM_API_KEY"]
   },
 
-  // Non-secret configuration. Secrets (LLM_API_KEY) are set with
+  // Production non-secret configuration. Local development may override any of
+  // these through `.env`. Secrets (LLM_API_KEY) are set with
   // `uv run pywrangler secret put LLM_API_KEY` and never live in this file.
+  //
   // Read from Python by ATTRIBUTE only: `env.LLM_BASE_URL`. Subscript access
   // (`env["LLM_BASE_URL"]`) raises — the env wrapper has no __getitem__.
+  //
+  // LLM_PROTOCOL selects the wire protocol. Each one appends its own path suffix
+  // to LLM_BASE_URL, which must therefore be an API ROOT, with no query string:
+  //
+  //   responses         -> {base}/responses          root conventionally ends /v1
+  //   chat_completions  -> {base}/chat/completions   root conventionally ends /v1
+  //   anthropic         -> {base}/v1/messages        root must NOT end /v1
+  //
+  // LLM_SCHEMA_MODE decides how much of the JSON Schema reaches the model:
+  //
+  //   strict       enforced by the endpoint; under responses/chat_completions the
+  //                canonical_url enum cannot be violated, under anthropic it is a
+  //                forced tool call and only best effort
+  //   json_object  JSON guaranteed, schema moves into the prompt (DeepSeek, ZhiPu)
+  //   none         no output-format field at all (endpoints that reject one)
+  //
+  // Anything but `strict` logs a WARNING on every run. There is no runtime probe
+  // and no automatic fallback — see docs/adr/0005-llm-multi-protocol.md.
+  // config.py rejects an unknown value and a base URL of the wrong shape at
+  // startup rather than defaulting.
   "vars": {
     "CHANNEL_FEED_URL": "https://rsshub.rssforever.com/telegram/channel/linux_do_channel",
+    "LLM_PROTOCOL": "responses",
+    "LLM_SCHEMA_MODE": "strict",
     "LLM_BASE_URL": "https://api.openai.com/v1",
     "LLM_MODEL": "REPLACE_WITH_MODEL_ID",
     "LLM_PROMPT_VERSION": "1",

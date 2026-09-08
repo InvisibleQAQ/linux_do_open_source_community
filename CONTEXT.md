@@ -26,9 +26,21 @@ The evidence-bearing relationship between a Project and the Topic Post that refe
 
 A Project candidate that the LLM classified as `include` using only an explicit repository URL found in the source post and whose structured output passed validation.
 
-### Responses-Compatible Endpoint
+### Classifier Endpoint
 
-An HTTPS API root configured by `LLM_BASE_URL` whose `/responses` endpoint implements the OpenAI Responses API request/output shape and strict JSON Schema Structured Outputs. Compatibility is a required capability, not a provider-name assumption.
+The single HTTPS API **root** configured by `LLM_BASE_URL` that the classifier talks to. It is a root, never a full endpoint path — the path suffix is decided by the LLM Protocol, not by configuration. Compatibility with the configured protocol is a required capability, never a provider-name assumption.
+
+Supersedes the earlier term "Responses-Compatible Endpoint", which assumed a single protocol. See `docs/adr/0005-llm-multi-protocol.md`.
+
+### LLM Protocol
+
+The wire protocol the Classifier Endpoint is expected to speak, selected by `LLM_PROTOCOL` and never probed at runtime. One of `responses` (OpenAI Responses API, the default), `chat_completions` (OpenAI Chat Completions), `anthropic` (Anthropic Messages API). Each protocol owns its URL suffix, auth header, message shape, schema wrapper and output extraction; the classification prompt and the JSON Schema body are protocol-agnostic and shared.
+
+### Schema Mode
+
+How much of the JSON Schema actually reaches the model, selected by `LLM_SCHEMA_MODE`. `strict` delivers the schema as an enforced constraint, which under `responses` and `chat_completions` makes the `canonical_url` `enum` unreachable to violate; under `anthropic` it is a forced tool call and therefore best effort, because Anthropic's grammar constraint is gated on a separate `strict: true` tool flag this project does not send. `json_object` only asks for valid JSON and moves the schema into the prompt; `none` sends no output-format field at all, for endpoints that reject one.
+
+Degrading the Schema Mode is a configuration decision, never a runtime reaction to a failure: a request that fails is never retried under a weaker mode. Degrading costs more rejected decisions, not corrupted data, because the Published Project guarantee rests on the `allowed_urls` re-check rather than on the schema.
 
 ### Sync Run
 

@@ -42,6 +42,13 @@ backend/src/
     ├── domain/                # 纯逻辑，零 I/O
     │   ├── github_url.py      # 提取 + 规范化（已完成，115 个测试）
     │   └── timestamps.py      # 唯一的时间戳格式（已完成）
+    ├── llm/                   # LLM wire 协议：纯逻辑，stdlib only
+    │   ├── protocol.py        # LLMProtocol / SchemaMode 枚举 + get_adapter 分派 + base URL 校验
+    │   ├── errors.py          # ClassifierError + 全部 CATEGORY_*（被三个适配器共用）
+    │   ├── json_text.py       # 文本 -> JSON，唯一的宽容点：仅降级档解 markdown 围栏
+    │   ├── responses.py       # OpenAI Responses：text.format
+    │   ├── chat_completions.py# OpenAI Chat Completions：response_format.json_schema
+    │   └── anthropic.py       # Anthropic Messages：x-api-key + 强制 tool_choice
     ├── adapters/              # 运行时适配，可以 import workers / js
     │   └── http.py            # 唯一出网出口：限时 + 限大小
     ├── persistence/           # D1 边界
@@ -56,6 +63,10 @@ backend/src/
 ```
 
 **`domain/` 不得 import `adapters/`、`persistence/`、`workers`、`js`、`httpx`。** 这条是可测试性的地基：`domain/` 必须能在普通 CPython 的 pytest 下 import 和运行，而 `workers` / `js` 在 CPython 下不存在。`adapters/http.py` 里 `from js import AbortSignal` 写在函数内而不是模块级，就是这个原因。
+
+**`llm/` 只准 import stdlib，且不得反向 import `classifier`。** 同一条地基，多一条约束：`classifier.py` 分派进 `llm/`，反向 import 就是环；而 `classifier.py` 依赖 pydantic，让 `llm/` 沾上它就多付一份启动快照成本。这也是 `ClassifierError` 和全部 `CATEGORY_*` 下沉到 `llm/errors.py` 的原因——三个适配器都要抛它。`classifier.py` 原样 re-export，所以 `from linuxdo_oss.classifier import ClassifierError` 仍然可用。这条约束由 `backend/tests/test_llm_purity.py` 用子进程守着（同进程里 pydantic 早被别的测试导入了，断言不成立）。
+
+**`llm/` 的分派是惰性的。** `get_adapter()` 在函数内 import 选中的那一个模块。一次部署只用一个协议，而 Worker 启动上限 1 秒，为永远不会跑的两个协议付导入成本没有道理。所以 `llm/__init__.py` **不得**导出三个适配器模块。
 
 **`JsProxy` 不得离开 `persistence/d1.py`。** 所有行经 `.to_py()` 变成 dict，再进 Pydantic 模型。Cloudflare 自己的 `query-d1` 示例把 JsProxy 直接交给序列化器，被标了 `@pytest.mark.xfail(reason="500 error, fixme")`；他们那个转成真 Python dict 的 FastAPI 示例则全套测试通过。
 
@@ -108,9 +119,13 @@ uv run ruff check backend/ && uv run ruff format --check backend/
 
 Cloudflare 没有 Python Workers 的测试框架，`@cloudflare/vitest-pool-workers` 是 JS/TS 专用。所以分两层：
 
-**纯层（默认，177 个测试 0.5 秒）** —— 普通 CPython pytest。覆盖 `domain/`、`persistence/read_queries.py` 的 SQL 与游标、`sync.py` 的 SQL 常量、`d1.py` 的上限守卫。D1 是 SQLite，所以表结构约束、幂等、抢占租约、键集分页全部用 stdlib `sqlite3` 跑真实迁移来验证——不需要 Worker。
+**纯层（默认，784 个测试约 1.8 秒，其中 4 个已知失败）** —— 普通 CPython pytest。覆盖 `domain/`、`persistence/read_queries.py` 的 SQL 与游标、`sync.py` 的 SQL 常量、`d1.py` 的上限守卫。D1 是 SQLite，所以表结构约束、幂等、抢占租约、键集分页全部用 stdlib `sqlite3` 跑真实迁移来验证——不需要 Worker。
 
 测试直接 import 代码里的 SQL 常量（如 `from linuxdo_oss.sync import CLAIM_TOPIC_SQL`），不抄副本，避免测试与实现漂移。
+
+**已知失败，与 LLM 改动无关**：`test_write_repository.py` 有 4 个测试挂在 `claim_topic` 返回 `False`，在未改动的工作树上可复现（`git stash` 验证过）。该文件只 import `persistence/`。
+
+根因在 **fixture 侧，不是生产代码**，commit `325ac81` 的 message 已记录：`seed_topic` 对已结算的主题无条件断言抢占成功；`make_post` 的 guid 未按 topic 隔离，撞上全表 UNIQUE 的 `idx_topic_posts_guid`。修它要改 fixture。改动前请以此为基线，不要把它当成自己引入的回归。
 
 **Worker 层（`@pytest.mark.worker`，尚未编写）** —— 起 `pywrangler dev` 子进程，用 `requests` 做黑盒 HTTP 断言。只有 JsProxy 转换、`batch()` 原子性、ASGI + cron 共存这些必须真运行时的东西才放这层。
 
@@ -120,16 +135,17 @@ Cloudflare 没有 Python Workers 的测试框架，`@cloudflare/vitest-pool-work
 
 `sync.py` 的 `_run()` 抛 `NotImplementedError`，消息里写明了实现顺序。抢占/租约/计数器机制已固定并有测试，接端口进去即可，不要重构它。
 
+LLM 边界已完成：`classifier.py`（分类业务）+ `llm/`（三协议 wire 适配器 `LLM_PROTOCOL`、三档 schema 降级 `LLM_SCHEMA_MODE`、候选仓库白名单、Pydantic 二次校验）。见 `docs/adr/0005-llm-multi-protocol.md`。它只缺调用方——`sync.py` 还没接。
+
 尚未编写的模块，每个都要在 `domain/`（纯）与 `adapters/`（运行时）之间划清边界：
 
 1. `feeds/channel.py` —— 读 RSSHub feed，从 `link` / `title` / `description` 各字段抽 topic id。**真实 feed 已确认**：RSS 2.0，item 只有 `title`/`description`/`link`/`guid`/`pubDate`，topic 链接藏在 `description` 的 HTML 里且带楼层后缀（`/t/topic/2837720/1`），`link` 指向 Telegram 而非 linux.do。
 2. `feeds/topic.py` —— 读单主题 RSS，选首帖 + 含 GitHub 链接的回复。HTML→文本用 stdlib `html.parser`。
 3. `feeds/xml_safe.py` —— **不要假定 `defusedxml` 在 Pyodide 下可用**（`[UNKNOWN]`，未在文档、Pyodide 索引或任何官方示例中出现，且 2021 年后未发版）。用 stdlib `xml.etree.ElementTree`，加上：字节上限、解析前拒绝前 4 KiB 含 `<!DOCTYPE` 或 `<!ENTITY` 的输入。
-4. `classifier.py` —— Responses API 适配器，strict `text.format` JSON Schema，候选仓库白名单，Pydantic 二次校验。
-5. `persistence/write_repository.py` —— `batch()` 幂等 upsert。
+4. `persistence/write_repository.py` —— `batch()` 幂等 upsert。
 
 ## 三个 `[UNKNOWN]`，都要 spike 验证
 
 1. **部署后 Worker 出网连通性**。`spikes/egress/` 已备好，先跑它。**必须看部署后的 URL**，`pywrangler dev` 可能从开发机出网从而掩盖封锁。
 2. **`workers.fetch` 的超时机制**。它没有 timeout 选项。`adapters/http.py` 叠了两层：`signal=AbortSignal.timeout(ms)`（kwargs 原样进 JS `RequestInit`，workerd 里有这个 API，但无任何 Python 侧文档或示例）+ `asyncio.wait_for` 外层兜底。第一层是否生效要在部署后的 Worker 上验证。
-3. **自定义 LLM 端点是否真支持 strict `text.format` 结构化输出**。要有能力探测，不许静默回退到 Chat Completions 或自由 JSON。
+3. **自定义 LLM 端点是否真支持 strict 结构化输出**。ADR 0005 明确**不做**运行时能力探测（Worker 无状态，探测结果无处缓存；且"探测失败就换档"正是被禁止的静默回退）。端点不支持时把 `LLM_SCHEMA_MODE` 配成 `json_object` 或 `none`——防幻觉保证不变，因为它靠的是 `_reject_unknown_and_duplicate()` 而不是 schema。**这一项现在可绕开，但仍未被验证**：部署前应人工验证真实端点，再据此定档。

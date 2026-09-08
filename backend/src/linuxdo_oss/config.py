@@ -11,7 +11,20 @@ testable under plain CPython.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
+
+from linuxdo_oss.llm import (
+    LLMProtocol,
+    SchemaMode,
+    parse_protocol,
+    parse_schema_mode,
+    validate_base_url,
+)
+
+logger = logging.getLogger(__name__)
 
 # Hard platform limits that constrain these defaults. Do not raise them without
 # re-reading the numbers in the root CLAUDE.md.
@@ -28,6 +41,8 @@ class Settings:
     llm_base_url: str
     llm_model: str
     llm_api_key: str
+    llm_protocol: LLMProtocol
+    llm_schema_mode: SchemaMode
     llm_prompt_version: str
     sync_batch_size: int
     http_timeout_seconds: float
@@ -42,12 +57,47 @@ def _required(env: object, name: str) -> str:
     return str(value)
 
 
+# PEP 695 syntax here, unlike `api/schemas.py`'s classic `Generic[T]`: that one is
+# a pydantic model and the runtime pins pydantic 2.10.6 (hence the `UP046` ignore
+# in pyproject.toml). This is a plain function, so the constraint does not apply.
+def _number[N: (int, float)](env: object, name: str, default: N, cast: Callable[[Any], N]) -> N:
+    """Read a numeric setting, or raise `RuntimeError`. Never `ValueError`.
+
+    `int("twenty")` raises `ValueError`, and `run_sync` wraps `load_settings` in
+    `except RuntimeError` only — so before this existed a typo in
+    `SYNC_BATCH_SIZE` escaped a function that promises never to raise and took the
+    cron invocation down with it. `.env` values are always strings and
+    `wrangler.jsonc` `vars` are hand-edited JSON, so this is a typo away, not
+    hypothetical.
+
+    The message names the variable and NOT its value: `int`'s own message quotes
+    the input, and this one reaches the log through `run_sync`'s
+    `logger.exception`.
+
+    Falsy is the pre-existing contract, kept deliberately: an absent, blank or
+    zero value means "use the default", exactly as the old `or default` did.
+    """
+    raw = getattr(env, name, None)
+
+    if not raw:
+        return default
+
+    try:
+        return cast(raw)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(f"{name} must be a number") from error
+
+
 def load_settings(env: object) -> Settings:
-    """Build Settings from the Worker env.
+    """Build Settings from the Worker env. Raises `RuntimeError`, never `ValueError`.
 
     Fails loudly on a missing value rather than defaulting, because a silently
     empty `LLM_BASE_URL` would turn into a confusing HTTP error deep in the
     classifier instead of an obvious configuration problem here.
+
+    `LLM_PROTOCOL` and `LLM_SCHEMA_MODE` are the same bargain one level up: both
+    default when absent (to `responses` / `strict`, which is what the deployment
+    did before either existed) and both refuse to guess when present and wrong.
     """
     base_url = _required(env, "LLM_BASE_URL").rstrip("/")
 
@@ -56,19 +106,53 @@ def load_settings(env: object) -> Settings:
         # origin, and that origin is never accepted from a public request.
         raise RuntimeError("LLM_BASE_URL must be an https:// URL from deployment config")
 
-    batch_size = int(getattr(env, "SYNC_BATCH_SIZE", 20) or 20)
-    concurrency = min(int(getattr(env, "SYNC_CONCURRENCY", 4) or 4), MAX_CONCURRENCY_CEILING)
+    # `llm/` signals a bad value with ValueError, but every configuration failure
+    # must leave this module as RuntimeError: that is the type the error-handling
+    # spec assigns to the third kind of failure, and the only one `run_sync`
+    # catches around `load_settings`. A ValueError escaping here would propagate
+    # out of `run_sync`, which promises never to raise.
+    try:
+        # Both parsers raise on an unrecognised value instead of defaulting. A
+        # typo in LLM_PROTOCOL that quietly became `responses` would surface as
+        # 404s from an endpoint the operator believed they had selected — the
+        # exact confusion this configuration surface exists to remove.
+        protocol = parse_protocol(getattr(env, "LLM_PROTOCOL", None) or LLMProtocol.RESPONSES.value)
+        schema_mode = parse_schema_mode(
+            getattr(env, "LLM_SCHEMA_MODE", None) or SchemaMode.STRICT.value
+        )
+
+        # The path suffix is the adapter's to append, so the root must not already
+        # carry one. Checked at startup because the alternative is a 404 five
+        # minutes later, from a cron run. `validate_base_url` names the offending
+        # suffix and never the URL — a gateway base URL can carry a key in a query
+        # string.
+        validate_base_url(protocol, base_url)
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
+
+    if schema_mode is not SchemaMode.STRICT:
+        # Degrading is legitimate and configured, never silent: ADR 0005 forbids
+        # the runtime fallback, not the deployment choice. Every run says so, and
+        # only the mode name is logged — never a URL, model or key.
+        logger.warning(
+            "LLM_SCHEMA_MODE=%s: the canonical_url enum is not enforced by the "
+            "endpoint; the allowlist re-check is the only guard",
+            schema_mode.value,
+        )
+
+    batch_size = _number(env, "SYNC_BATCH_SIZE", 20, int)
+    concurrency = min(_number(env, "SYNC_CONCURRENCY", 4, int), MAX_CONCURRENCY_CEILING)
 
     return Settings(
         channel_feed_url=_required(env, "CHANNEL_FEED_URL"),
         llm_base_url=base_url,
         llm_model=_required(env, "LLM_MODEL"),
         llm_api_key=_required(env, "LLM_API_KEY"),
+        llm_protocol=protocol,
+        llm_schema_mode=schema_mode,
         llm_prompt_version=str(getattr(env, "LLM_PROMPT_VERSION", "1") or "1"),
         sync_batch_size=batch_size,
-        http_timeout_seconds=float(getattr(env, "HTTP_TIMEOUT_SECONDS", 10) or 10),
-        max_response_bytes=int(
-            getattr(env, "MAX_RESPONSE_BYTES", 2 * 1024 * 1024) or 2 * 1024 * 1024
-        ),
+        http_timeout_seconds=_number(env, "HTTP_TIMEOUT_SECONDS", 10.0, float),
+        max_response_bytes=_number(env, "MAX_RESPONSE_BYTES", 2 * 1024 * 1024, int),
         max_concurrency=concurrency,
     )

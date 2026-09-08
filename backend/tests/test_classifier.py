@@ -29,6 +29,7 @@ import pytest
 from linuxdo_oss.classifier import (
     CATEGORY_CONFIGURATION,
     CATEGORY_DUPLICATE_DECISION,
+    CATEGORY_ENDPOINT_CONFIG,
     CATEGORY_INCOMPLETE,
     CATEGORY_INCOMPLETE_MAX_TOKENS,
     CATEGORY_MALFORMED_JSON,
@@ -55,6 +56,8 @@ from linuxdo_oss.classifier import (
     CandidateRepository,
     ClassifierError,
     Decision,
+    LLMProtocol,
+    SchemaMode,
     build_json_schema,
     build_payload,
     classify,
@@ -121,6 +124,11 @@ def make_settings(**overrides: Any) -> Settings:
         "llm_base_url": "https://api.example.com/v1",
         "llm_model": "gpt-test",
         "llm_api_key": API_KEY,
+        # Spelled out rather than defaulted on the dataclass: every construction
+        # site should say which protocol it exercises, and `Settings` is built in
+        # exactly one production place, so requiring them costs nothing there.
+        "llm_protocol": LLMProtocol.RESPONSES,
+        "llm_schema_mode": SchemaMode.STRICT,
         "llm_prompt_version": "7",
         "sync_batch_size": 20,
         "http_timeout_seconds": 10.0,
@@ -783,6 +791,24 @@ def test_every_raised_category_is_declared():
     assert raised <= ERROR_CATEGORIES
 
 
+def test_the_declared_category_set_matches_the_constants_that_define_it():
+    """`llm/errors.py` writes the same names twice: once as `CATEGORY_*`
+    constants and once inside `ERROR_CATEGORIES`. Nothing in production reads the
+    frozenset, so a constant added without the set would drift in silence and the
+    next `error_summary` audit would be checking against a stale list. This is
+    the only thing that notices.
+    """
+    from linuxdo_oss.llm import errors
+
+    constants = {
+        value
+        for name, value in vars(errors).items()
+        if name.startswith("CATEGORY_") and isinstance(value, str)
+    }
+
+    assert constants == set(ERROR_CATEGORIES)
+
+
 # ----------------------------------------------------------------------
 # The call
 # ----------------------------------------------------------------------
@@ -884,8 +910,6 @@ def test_classify_prefers_a_configured_output_budget_when_settings_grows_one():
         (502, True),
         (429, True),
         (400, False),
-        (401, False),
-        (404, False),
     ],
 )
 def test_transport_failures_keep_the_classification_the_transport_made(status, retryable):
@@ -898,6 +922,46 @@ def test_transport_failures_keep_the_classification_the_transport_made(status, r
 
     assert caught.value.category == CATEGORY_TRANSPORT
     assert caught.value.retryable is retryable
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_a_misconfigured_endpoint_is_not_reported_as_a_transport_failure(status):
+    """404 is almost always the wrong LLM_PROTOCOL; 401/403 is the key.
+
+    Both used to arrive as `transport` with the status discarded, which left an
+    operator unable to tell a configuration mistake from an outage — the two
+    demand opposite responses, and only one of them is fixed by waiting.
+    """
+    transport = FakeTransport(
+        error=FakeFetchError(f"upstream returned {status}", status=status, retryable=False)
+    )
+
+    with pytest.raises(ClassifierError) as caught:
+        classify_with(transport)
+
+    assert caught.value.category == CATEGORY_ENDPOINT_CONFIG
+    assert caught.value.retryable is False
+    # The status must be legible, and the message must point at the three settings
+    # that can be wrong — that is the whole point of splitting this category out.
+    assert str(status) in str(caught.value)
+    assert "LLM_PROTOCOL" in str(caught.value)
+
+
+def test_a_status_carrying_failure_never_names_the_endpoint():
+    """The status may be reported. The URL and the provider body may not."""
+    transport = FakeTransport(
+        error=FakeFetchError(
+            "upstream returned 404 for https://api.example.com/v1/responses",
+            status=404,
+            retryable=False,
+        )
+    )
+
+    with pytest.raises(ClassifierError) as caught:
+        classify_with(transport)
+
+    assert "api.example.com" not in str(caught.value)
+    assert API_KEY not in str(caught.value)
 
 
 def test_a_timeout_is_retryable_and_its_message_carries_no_detail():
