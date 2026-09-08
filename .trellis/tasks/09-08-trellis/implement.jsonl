@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/09-08-trellis/prd.md", "reason": "本任务的全部要求与已实测事实：为何用项目级否定规则而非改全局配置、内层 .gitignore 已排除什么、不得用 git add -f。"}
+{"file": ".trellis/.gitignore", "reason": "内层排除规则的权威定义。不得修改，实现时只需确认它在解除全局忽略后仍生效。"}

@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验收前的质量门槛：测试组织、纯 CPython 可测性、pytest 约定。llm/ 包必须在不碰 workers 的前提下可导入可测。"}
+{"file": "docs/adr/0005-llm-multi-protocol.md", "reason": "逐条核对实现没有偷偷违反 ADR：没引 SDK、没搬 provider registry、没有运行时探测、没有失败后换档重试。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对 404/401/403 归类、retryable 语义、以及错误消息不泄露配置值。"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "核对降级 WARNING 与全部错误路径的日志内容边界。"}
+{"file": ".trellis/spec/backend/environment-configuration.md", "reason": "核对两个新配置项的默认值、非法值硬失败、以及 wrangler.jsonc / .env.example 与规范三处一致。"}
+{"file": "CONTEXT.md", "reason": "核对代码里的命名与术语表一致，且旧术语「Responses-Compatible Endpoint」在全仓库无残留。"}

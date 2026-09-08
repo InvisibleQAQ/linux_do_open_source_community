@@ -30,7 +30,22 @@ python_modules/
 .env.*
 !.env.example
 
-# Trellis runtime
+# Trellis — TRACKED on purpose. `.trellis/spec/` governs the code in this repo
+# and belongs in the same history as the code it governs; `.trellis/tasks/`
+# carries the PRDs and decision trail.
+#
+# The negation below exists because a machine-level global gitignore may carry
+# a blanket `.trellis/` (this repo's author's does). A repo-local `.gitignore`
+# outranks `core.excludesFile`, so this line restores tracking without anyone
+# having to fix their global config — and a fresh clone behaves the same
+# whatever the cloner's global config says.
+#
+# What must NOT be tracked inside `.trellis/` is defined by `.trellis/.gitignore`
+# (local developer identity, the per-dev current-task pointer, agent runtime
+# state, backups, caches). That file is authoritative — do not duplicate its
+# rules here, and never `git add -f .trellis/`: `-f` bypasses it and drags in
+# `.developer`, `.runtime/` and every backup directory.
+!.trellis/
 .trellis/.runtime/
 .trellis/scripts/**/__pycache__/
 

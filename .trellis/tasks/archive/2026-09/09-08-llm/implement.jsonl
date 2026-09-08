@@ -1,0 +1,8 @@
+{"file": "docs/adr/0005-llm-multi-protocol.md", "reason": "本任务的决策来源：三协议集合、手写 wire shape 的理由、禁止运行时探测/回退、base URL 语义、llm/ 包的拆分依据。实现前必读，不得推翻。"}
+{"file": "CONTEXT.md", "reason": "Classifier Endpoint / LLM Protocol / Schema Mode 三条术语的权威定义。命名必须与此一致；「Responses-Compatible Endpoint」已作废。"}
+{"file": ".trellis/tasks/08-31-cloudflare-stack-prd/research/llm-protocol.md", "reason": "responses 协议 + strict 档的原始契约，逐字仍然有效。顶部已标注被 ADR 0005 精确化的范围。"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend 规范入口，先读它确定还有哪些分层规范适用。"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "要新建 llm/ 包（5 个模块），目录与模块职责划分必须服从既有规范。"}
+{"file": ".trellis/spec/backend/environment-configuration.md", "reason": "新增 LLM_PROTOCOL / LLM_SCHEMA_MODE 两个配置项，且要给 LLM_BASE_URL 加校验；这份规范要同步更新。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "新增 CATEGORY_ENDPOINT_CONFIG 分类，并把 FetchError.status 透进 ClassifierError。错误分类与不可重试语义必须符合规范。"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "降级档启动 WARNING 只准带档位名；错误消息不得含 URL / provider body / API key。日志边界规则在这里。"}

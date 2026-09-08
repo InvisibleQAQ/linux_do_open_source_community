@@ -42,6 +42,18 @@
 | `.trellis/spec/` | 分层编码规范，写代码前读 |
 | `.trellis/tasks/` | PRD、research 笔记、子代理上下文清单 |
 
+**`.trellis/` 是被跟踪的**，规范和它管的代码在同一份历史里。两件随之而来的事：
+
+- 什么不该跟踪由 `.trellis/.gitignore` 说了算（本地身份 `.developer`、per-dev 的
+  `.current-task`、`.runtime/`、agent 运行时、备份、缓存）。**永远不要 `git add -f .trellis/`**
+  —— `-f` 会绕过那份规则，把上面这些全拖进来。普通 `git add .trellis/` 是对的。
+- 项目 `.gitignore` 里有一条 `!.trellis/`。它存在是因为机器级的全局 gitignore 可能带一条
+  笼统的 `.trellis/`（本仓库作者的就带）。仓库内的 `.gitignore` 优先级高于
+  `core.excludesFile`，所以这条否定规则让跟踪行为不依赖任何人的机器配置。
+- 因为 `.trellis/` 不再被忽略，`add_session.py` 与 `task.py archive` 会**自己产生 commit**
+  （`chore: record journal` / `chore(task): archive ...`）。这是 Trellis 的既定设计
+  （`config.yaml` 的 `session_auto_commit` 默认 true），之前它们因为检测到被忽略而跳过 git。
+
 前后端唯一的耦合面是 API 契约：`frontend/src/api/types.ts` ↔ `backend/src/linuxdo_oss/api/schemas.py`。**改一边必须改另一边**，并更新 `.trellis/spec/frontend/api-contract.md`。
 
 ---

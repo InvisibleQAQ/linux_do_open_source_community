@@ -1,0 +1,11 @@
+{"file": "CONTEXT.md", "reason": "Terminology check: code and docs must use the glossary's words. Flag any drift between a term here and its use in code."}
+{"file": ".trellis/tasks/08-31-cloudflare-stack-prd/prd.md", "reason": "The acceptance criteria checklist. Every item must be traceable to code or to a test, or explicitly reported as not yet implemented."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "The backend forbidden-pattern table and the two-layer testing bar. Includes the commands: uv run pytest backend/tests, ruff check, ruff format --check."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "The frontend forbidden-pattern table, the pnpm check command, and the bundle budget (main chunk 705 kB / gzip 220 kB at skeleton completion)."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify every D1 write is idempotent by constraint, no read-then-write, no statement over 100 bound parameters, and no hand-formatted timestamp."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify failures are classified rather than swallowed, that per-topic isolation is intact, and that no error message can carry a secret or an unbounded payload."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Security check: grep for any log line that could emit env values, LLM payloads or full response bodies."}
+{"file": ".trellis/spec/frontend/api-contract.md", "reason": "Cross-layer check: frontend/src/api/types.ts and backend api/schemas.py must agree field for field. A change to one without the other is a defect."}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Verify all four states are handled in priority order on every data surface, and that end-of-list is decided by next_cursor === null."}
+{"file": "backend/CLAUDE.md", "reason": "Runtime-rule check: entrypoint shape, env access style, no runtime imports inside domain/, no JsProxy escaping persistence/d1.py, compatibility_date untouched."}
+{"file": "frontend/CLAUDE.md", "reason": "Port-integrity check: the five theme surgeries are still in place, icon-sets.ts has not been re-expanded, and no vendored file was edited without a comment and a note here."}

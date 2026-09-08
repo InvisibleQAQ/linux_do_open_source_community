@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/09-08-anthropic-strict/prd.md", "reason": "全部要求与已核实的 Anthropic wire 事实：strict 是工具定义顶层字段、GA 无 beta header、前置要求已满足；以及要改正的 8 处表述清单。"}
+{"file": "docs/adr/0005-llm-multi-protocol.md", "reason": "第 5 条「能力由配置声明、禁止静默回退」是本次决定发送 strict 的依据；本任务要把该 [UNKNOWN] 从未关闭项里移出。"}
+{"file": "CONTEXT.md", "reason": "「Schema Mode」词条是 strict 强度的权威定义，改完必须与代码一致。"}
+{"file": ".trellis/spec/backend/environment-configuration.md", "reason": "含 strict 跨协议强度不等的说明段，本次要改正。"}

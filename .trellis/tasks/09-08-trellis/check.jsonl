@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/09-08-trellis/prd.md", "reason": "逐条核对 7 条验收标准，特别是第 2、4、5 条：本地身份与运行时文件必须仍被内层规则排除，全局配置必须未被改动。"}
+{"file": ".trellis/.gitignore", "reason": "核对 git ls-files 的结果与这份规则一致，没有漏网的 .developer / .runtime / __pycache__ / 备份目录。"}
