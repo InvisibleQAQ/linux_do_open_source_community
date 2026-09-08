@@ -110,3 +110,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: LLM_BASE_URL 后缀容忍：按归属剥离或拒绝
+
+**Date**: 2026-09-08
+**Task**: LLM_BASE_URL 后缀容忍：按归属剥离或拒绝
+**Branch**: `main`
+
+### Summary
+
+LLM_BASE_URL 末尾多写端点路径时按后缀归属分两路：属于当前协议自己 ENDPOINT_SUFFIX 路径前缀的剥回 API 根并每 Sync Run 告警一次，属于别协议的继续启动拒绝并在信息里指出协议归属。理由是后者配错的是 LLM_PROTOCOL 而非 URL，剥掉会把可诊断的启动失败变成 cron 里的 404。validate_base_url 合并为 resolve_base_url（校验与归一化一次遍历），Class A 集合改从 ENDPOINT_SUFFIX 推导，三个适配器的 FORBIDDEN_BASE_SUFFIXES 与 WireAdapter 对应成员全部删除，净减少一处特殊情况。WARNING 打在 config.py 靠字符串减法反推后缀，llm/ 保持零 logging。修掉剥离自带的边界：'https://v1'.endswith('/v1') 为真会剥成 https:/。行为翻转一处：anthropic + 以 /v1 结尾的 base 由拒绝改为接受。新增 ADR 0006 部分覆盖 0005 第 6 条，同步 CONTEXT.md、根 CLAUDE.md、environment-configuration.md、.env.example 内联提示。遗留：test_write_repository.py 4 个失败（claim_topic 返回 False）为既有缺陷，clean tree 上同样失败，未处理。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eed12a1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
