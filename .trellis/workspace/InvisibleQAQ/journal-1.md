@@ -76,3 +76,37 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: 让 .trellis 进入版本控制 + anthropic 发送工具级 strict
+
+**Date**: 2026-09-08
+**Task**: 让 .trellis 进入版本控制 + anthropic 发送工具级 strict
+**Branch**: `main`
+
+### Summary
+
+两件收尾。(1) .trellis 进版本控制：原因是机器级全局 gitignore 带一条笼统的 .trellis/，导致 spec 与它管的代码不在同一份历史里，上一轮 23b6b19 丢了 4 份 spec、一份任务 PRD 和父 PRD 的 9 处修订，archive 与 journal 脚本也因检测到被忽略而跳过 git。用项目级 !.trellis/ 否定规则解决，不改全局配置——仓库内 .gitignore 优先级高于 core.excludesFile，实测有效，且队友克隆后行为不依赖各人机器状态。内层 .trellis/.gitignore 本来就写对了未改动，79 个文件里不含 .developer / .current-task / .runtime / 缓存 / 备份。副作用已记入 CLAUDE.md：脚本从此会自己产生 commit（本轮已观察到生效）。(2) anthropic 适配器发送工具级 strict：LLM_SCHEMA_MODE=strict 对 anthropic 一直名不副实，Anthropic 把语法约束挂在工具定义顶层的 strict 字段上，没有它强制工具调用只绑定字段名、对类型与必填是 best effort，canonical_url 的 enum 不成硬约束。核实依据：strict 是工具定义顶层字段而非 tool_choice 字段（放错会被静默忽略，故测试直接断言 set(tool) 与 strict not in tool_choice）、GA 无需 beta header、前置要求 additionalProperties:false + 全部 required 已由 build_json_schema 满足（本轮机器验证 schema 每层对象都满足）。依据 ADR 0005 第 5 条能力由配置声明：LLM_SCHEMA_MODE=strict 就是运维在声明端点支持严格结构化输出，不发等于对三协议之一静默打折。同时改正上一轮我写错的 8 处表述（原 docstring 断言 Anthropic 没有 strict 标志），每处保留反事实说明以防日后有人把标志当冗余删掉；ADR 把该 UNKNOWN 移出未关闭项。ruff 干净，纯测试 780 passed。遗留：test_write_repository.py 4 个既有失败（fixture 侧，根因见 325ac81）；Anthropic strict 的关键字限制清单是否与 OpenAI 相同仍 UNKNOWN（本项目 schema 已避开清单全部关键字，两边无影响）。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1d6ae45` | (see git log) |
+| `ae66eca` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
