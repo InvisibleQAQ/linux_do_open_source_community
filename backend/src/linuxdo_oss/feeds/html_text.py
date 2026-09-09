@@ -5,10 +5,8 @@ two rules from the PRD collide there:
 
   * "RSS HTML is converted to text on the backend and never injected as raw HTML" —
     so `topic_posts.cleaned_text` must be text, and the frontend renders it as text.
-  * "A reply is retained only if its original content contains at least one explicit
-    GitHub URL", and the classifier may only choose from repositories found in the
-    post's own text — so a URL that the conversion drops is a project that can never
-    be published.
+  * The classifier may only choose from repositories found in the post's own text —
+    so a URL that the conversion drops is a project that can never be published.
 
 The second rule is what makes this module more than a tag stripper. In Discourse
 markup a repository is very often *only* in an attribute:
@@ -27,12 +25,10 @@ Only absolute `http`/`https` hrefs are appended, because that is exactly the set
 `javascript:void(0)` can never become a repository candidate, so putting it in the
 stored text would be noise with no upside.
 
-`extract_links` exists for a narrower reason, and it is not redundant with the
-above: `html.parser` resolves character references *in attribute values*, so
-`href="https://github.com&#x2F;owner&#x2F;repo"` becomes a usable URL here, while
-the same bytes in the raw feed defeat any regex reading the markup directly. The
-topic reader feeds both the raw HTML and these links to the retention predicate for
-that reason.
+Appending the href is also what handles escaped markup: `html.parser` resolves
+character references *in attribute values*, so
+`href="https://github.com&#x2F;owner&#x2F;repo"` reaches the text as a usable URL,
+while the same bytes in the raw feed defeat any regex reading the markup directly.
 
 Why `html.parser` and not beautifulsoup4/lxml: they are extra deploy-time snapshot
 weight against a 1 s Worker startup limit, and lxml is a native extension whose
@@ -47,7 +43,7 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 
-__all__ = ["extract_links", "html_to_text"]
+__all__ = ["html_to_text"]
 
 # ----------------------------------------------------------------------
 # Tag vocabulary
@@ -164,15 +160,11 @@ class _TextExtractor(HTMLParser):
         self._skip_depth = 0
         # (href, index into _parts where the anchor's text starts).
         self._anchors: list[tuple[str, int]] = []
-        self._links: list[str] = []
 
     # -- output ---------------------------------------------------------
 
     def text(self) -> str:
         return _collapse("".join(self._parts))
-
-    def links(self) -> list[str]:
-        return list(self._links)
 
     def finish(self) -> None:
         """Flush anchors left open by unbalanced markup.
@@ -195,8 +187,6 @@ class _TextExtractor(HTMLParser):
 
         if tag == "a":
             href = _attribute(attrs, "href")
-            if href:
-                self._record_link(href)
             self._anchors.append((href, len(self._parts)))
 
         if tag in _PARAGRAPH_TAGS or tag in _LINE_TAGS:
@@ -239,13 +229,6 @@ class _TextExtractor(HTMLParser):
         self._parts.append(data)
 
     # -- private --------------------------------------------------------
-
-    def _record_link(self, href: str) -> None:
-        # Deduplicated, first occurrence wins, mirroring
-        # `extract_repository_candidates`. A post quoting the same link ten times is
-        # one link, and the list stays bounded on hostile input.
-        if href not in self._links:
-            self._links.append(href)
 
     def _close_anchor(self) -> None:
         href, start = self._anchors.pop()
@@ -301,24 +284,3 @@ def html_to_text(html: str) -> str:
         return ""
 
     return _parse(html).text()
-
-
-def extract_links(html: str) -> list[str]:
-    """Every distinct `<a href>` value, in document order, entity-decoded.
-
-    Verbatim — relative and non-http hrefs included — because this module does not
-    get to decide what a caller may accept; `domain/github_url.py` owns that and
-    rejects everything that is not a repository. Values are only stripped of
-    surrounding whitespace, and empty ones are dropped.
-
-    Deliberately only `<a href>`: an `<img src>` on github.com is a badge or a raw
-    asset, not a project the author linked, and admitting it would manufacture
-    repository candidates the post never mentioned.
-
-    Anchors inside `<script>`/`<style>` are not collected — the same skip that keeps
-    code out of the text keeps injected markup out of the candidate set.
-    """
-    if not html:
-        return []
-
-    return _parse(html).links()

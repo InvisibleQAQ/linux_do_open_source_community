@@ -2,9 +2,9 @@
 
 ## Glossary
 
-### Channel Feed
+### Tag Feed
 
-The configured RSSHub Telegram feed used only to discover Linux.do topic URLs.
+The one configured Discourse list feed (`/tag/<slug>/<id>.rss`, or the identically shaped `/latest.rss` and `/c/<slug>.rss`) that is the pipeline's sole input. Each item announces a Topic *and* carries that Topic's first post in full, so there is no separate fetch per Topic. Ordered by last activity, capped at ~30 items, with no pagination — a Topic that falls off the window is unreachable. The host every item must belong to is derived from this URL, never hard-coded, which is what allows the whole pipeline to run against any Discourse instance. See `docs/adr/0007-single-source-tag-feed.md`.
 
 ### Topic
 
@@ -12,7 +12,7 @@ A Linux.do discussion identified by its numeric topic ID. A topic is the primary
 
 ### Topic Post
 
-One RSS item inside a Linux.do topic feed. The first post is always retained; a reply is retained only when it contains an explicit GitHub URL.
+The opening post of a Topic, as plain text with Discourse's two generated closing paragraphs (the post/participant count and the "read full topic" link) removed. Exactly one exists per Topic: the Tag Feed carries no replies, so a repository first linked in a reply is not visible to this project. The row shape still keeps `post_number` and `is_first_post` because mentions point at a post and the schema is keyed on `(topic_id, post_number)`.
 
 ### Project
 
@@ -47,6 +47,18 @@ Degrading the Schema Mode is a configuration decision, never a runtime reaction 
 ### Sync Run
 
 One Cron-triggered ingestion attempt that claims at most 20 due topics and records bounded processing results.
+
+### Claim Lease
+
+The time window a Sync Run owns a Topic for. Taken by a single conditional UPDATE whose row count decides who won, so two overlapping runs can never process the same Topic. It lasts 15 minutes — the Worker wall-clock ceiling — because a lease shorter than one invocation would let the next run reclaim a Topic the current one is still working on. A run that dies leaves its lease to expire, and the next run returns the Topic to `ready`.
+
+### Topic Status
+
+The four states a Topic passes through: `ready` (row and text stored, awaiting judgement) → `classifying` (a Sync Run holds the Claim Lease) → `published` or `not_relevant`, with `failed` for a retriable error. `discovered` and `fetching` were removed when the Tag Feed collapsed discovery and fetching into one request; both remain legal schema values that are never written, so their removal needed no migration. A Topic is *born* `ready`, which is why `ready` is the status a claim accepts rather than an in-flight one it rejects.
+
+### Retry Budget
+
+How many times a Topic may be claimed before it is abandoned: 5. Each failure that is worth repeating schedules the next attempt 5, 10, 20 then 40 minutes out, doubling from the cron interval because nothing shorter can be observed — no run happens between two firings to pick the Topic up. A failure that cannot be repeated (a malformed feed, a schema violation) and an exhausted budget are recorded the same way, as no scheduled retry at all, so a permanently broken Topic stops consuming subrequests without needing a status of its own.
 
 ### Single Worker
 

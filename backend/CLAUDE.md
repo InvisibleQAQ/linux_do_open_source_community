@@ -12,11 +12,13 @@ Cloudflare Python Worker：FastAPI 读 API + 每 5 分钟的 cron 同步编排�
 
 **1. 入口类必须叫 `Default` 并继承 `WorkerEntrypoint`。** 模块级 handler（`on_fetch` / `on_scheduled`）自 2025-08-14 起默认禁用。
 
-**2. `asgi.entrypoint(app)` 不够用。** 它返回的类只有 `fetch`，没有 `scheduled`。所以 `backend/src/main.py` 自己写了两个 handler。两者签名不同且都是强制的：`fetch(self, request)` 只收 request，`scheduled(self, controller, env, ctx)` 四个参数全要。
+**2. `asgi.entrypoint(app)` 不够用。** 它返回的类只有 `fetch`，没有 `scheduled`。所以 `backend/src/main.py` 自己写了两个 handler。两者签名不同且都是强制的：`fetch(self, request)` 只收 request，`scheduled(self, controller, env, ctx)` 四个形参必须全部声明，否则调用时 TypeError。
 
 **3. `env` 只能属性访问。** `env.LLM_API_KEY` 可以，`env["LLM_API_KEY"]` 会抛异常——包装器只实现了 `__getattr__`。
 
-**4. FastAPI 路由里没有 `self.env`。** 从 ASGI scope 取：`request.scope["env"]`。已封装在 `api/deps.py`，路由不要直接碰 scope。cron 路径则是 `env` 参数直传，这就是 `run_sync(env)` 显式收参而不是读全局的原因。
+**4. FastAPI 路由里没有 `self.env`。** 从 ASGI scope 取：`request.scope["env"]`。已封装在 `api/deps.py`，路由不要直接碰 scope。
+
+**4b. 反过来，`scheduled` 里只有 `self.env`——它的 `env` 形参实测是 `None`。** 声明了不等于收到了。wrangler 4.129.1 下绑定表已正确列出 `env.LLM_BASE_URL` 等全部变量，但 `getattr(env, "LLM_BASE_URL", None)` 返回 `None`，`type(env).__name__ == "NoneType"`；同一次调用里 `self.env` 拿到的是真值。所以 cron 路径写 `run_sync(self.env)`。曾经写成 `run_sync(env)`，后果是每轮 cron 都以 `missing required configuration: LLM_BASE_URL` 中止，而且被 `run_sync` 的 `except RuntimeError` 吞掉——HTTP 仍返回 200 `ok`，只有日志里能看见。`run_sync` 显式收 env 而不是读全局，是因为 cron 没有 request、也就没有 ASGI scope 可读。
 
 **5. `src/` 不在 import path 上，但 `main` 所在目录是。** 所以是 `from linuxdo_oss.api.app import app`，绝不是 `from src.linuxdo_oss...`。
 
@@ -42,6 +44,11 @@ backend/src/
     ├── domain/                # 纯逻辑，零 I/O
     │   ├── github_url.py      # 提取 + 规范化（已完成，115 个测试）
     │   └── timestamps.py      # 唯一的时间戳格式（已完成）
+    ├── feeds/                  # RSS/XML 读取层
+    │   ├── xml_safe.py        # 字节上限 + DTD/实体拒绝
+    │   ├── rss.py             # RSS 2.0 / Atom item 遍历 + RFC 822 日期
+    │   ├── html_text.py       # cooked HTML -> 纯文本，保留绝对 href
+    │   └── tag_feed.py        # 唯一的读取器：一次请求拿到主题列表 + 首帖全文
     ├── llm/                   # LLM wire 协议：纯逻辑，stdlib only
     │   ├── protocol.py        # LLMProtocol / SchemaMode 枚举 + get_adapter 分派 + base URL 校验
     │   ├── errors.py          # ClassifierError + 全部 CATEGORY_*（被三个适配器共用）
@@ -59,7 +66,7 @@ backend/src/
     │   ├── app.py             # FastAPI 应用与路由
     │   ├── schemas.py         # 响应模型 = 与前端的契约的一半
     │   └── deps.py            # request.scope["env"] 访问器
-    └── sync.py                # cron 编排（骨架，见下）
+    └── sync.py                # cron 编排 + 编排层 SQL 常量 + 重试预算
 ```
 
 **`domain/` 不得 import `adapters/`、`persistence/`、`workers`、`js`、`httpx`。** 这条是可测试性的地基：`domain/` 必须能在普通 CPython 的 pytest 下 import 和运行，而 `workers` / `js` 在 CPython 下不存在。`adapters/http.py` 里 `from js import AbortSignal` 写在函数内而不是模块级，就是这个原因。
@@ -119,13 +126,13 @@ uv run ruff check backend/ && uv run ruff format --check backend/
 
 Cloudflare 没有 Python Workers 的测试框架，`@cloudflare/vitest-pool-workers` 是 JS/TS 专用。所以分两层：
 
-**纯层（默认，785 个测试约 1.8 秒，其中 4 个已知失败）** —— 普通 CPython pytest。覆盖 `domain/`、`persistence/read_queries.py` 的 SQL 与游标、`sync.py` 的 SQL 常量、`d1.py` 的上限守卫。D1 是 SQLite，所以表结构约束、幂等、抢占租约、键集分页全部用 stdlib `sqlite3` 跑真实迁移来验证——不需要 Worker。
+**纯层（默认，706 passed / 1 skipped，约 1.9 秒，全绿）** —— 普通 CPython pytest。覆盖 `domain/`、`persistence/read_queries.py` 的 SQL 与游标、`sync.py` 的 SQL 常量、`d1.py` 的上限守卫。D1 是 SQLite，所以表结构约束、幂等、抢占租约、键集分页全部用 stdlib `sqlite3` 跑真实迁移来验证——不需要 Worker。
 
 测试直接 import 代码里的 SQL 常量（如 `from linuxdo_oss.sync import CLAIM_TOPIC_SQL`），不抄副本，避免测试与实现漂移。
 
-**已知失败，与 LLM 改动无关**：`test_write_repository.py` 有 4 个测试挂在 `claim_topic` 返回 `False`，在未改动的工作树上可复现（`git stash` 验证过）。该文件只 import `persistence/`。
+**那 4 个长期已知失败已修复**（随 ADR 0007 的状态机改动一并处理，因为留着会遮蔽真实回归）。三个 fixture 缺陷：`make_post` 的 guid 未按 topic 隔离，撞上全表 UNIQUE 的 `idx_topic_posts_guid`；`seed_topic` 对已结算主题无条件断言抢占成功（那本就抢不到，`CLAIM_TOPIC_SQL` 不接受任何终态）；失败重试用 `now=NOW` 抢占，而 `retry_after=LATER` 尚未到期。现在纯层全绿。
 
-根因在 **fixture 侧，不是生产代码**，commit `325ac81` 的 message 已记录：`seed_topic` 对已结算的主题无条件断言抢占成功；`make_post` 的 guid 未按 topic 隔离，撞上全表 UNIQUE 的 `idx_topic_posts_guid`。修它要改 fixture。改动前请以此为基线，不要把它当成自己引入的回归。
+`test_schema.py` 曾自带一份 CLAIM SQL 副本，因而在状态机改名时自洽地继续通过 —— 已改为 import `CLAIM_TOPIC_SQL` 与 `RECLAIM_EXPIRED_LEASES_SQL`。**不要再抄 SQL 副本进测试。**
 
 **Worker 层（`@pytest.mark.worker`，尚未编写）** —— 起 `pywrangler dev` 子进程，用 `requests` 做黑盒 HTTP 断言。只有 JsProxy 转换、`batch()` 原子性、ASGI + cron 共存这些必须真运行时的东西才放这层。
 
@@ -133,19 +140,53 @@ Cloudflare 没有 Python Workers 的测试框架，`@cloudflare/vitest-pool-work
 
 ## 未完成的部分
 
-`sync.py` 的 `_run()` 抛 `NotImplementedError`，消息里写明了实现顺序。抢占/租约/计数器机制已固定并有测试，接端口进去即可，不要重构它。
+后端的采集链路已经接通：`sync.py` 的 `_run()` / `_process_topic()` 不再抛
+`NotImplementedError`。一轮 cron 的形状是
 
-LLM 边界已完成：`classifier.py`（分类业务）+ `llm/`（三协议 wire 适配器 `LLM_PROTOCOL`、三档 schema 降级 `LLM_SCHEMA_MODE`、候选仓库白名单、Pydantic 二次校验）。见 `docs/adr/0005-llm-multi-protocol.md`。它只缺调用方——`sync.py` 还没接。
+```
+open_run
+  -> reclaim_expired_leases          先回收，否则死掉的上一轮永久占着行
+  -> read_tag_feed                   唯一一次出网（TAG_FEED_URL）
+  -> save_discovered_topics          行与首帖正文一起落库，状态直接是 ready
+  -> list_due_topics(SYNC_BATCH_SIZE) -> 逐个 claim_topic（条件 UPDATE 定胜负）
+  -> _process_claimed_topics          Semaphore(max_concurrency)，每任务独立 try
+  -> close_run                        在 finally 里，失败的轮次也要留下记录
+```
 
-尚未编写的模块，每个都要在 `domain/`（纯）与 `adapters/`（运行时）之间划清边界：
+单主题的形状是 `load_stored_posts（从 D1 读回，**不出网**）-> _candidates_of ->
+无候选就 mark_not_relevant（**不调 LLM**）-> classify -> publishable_decisions ->
+全非 include 也 mark_not_relevant -> publish_topic_result`。
 
-1. `feeds/channel.py` —— 读 RSSHub feed，从 `link` / `title` / `description` 各字段抽 topic id。**真实 feed 已确认**：RSS 2.0，item 只有 `title`/`description`/`link`/`guid`/`pubDate`，topic 链接藏在 `description` 的 HTML 里且带楼层后缀（`/t/topic/2837720/1`），`link` 指向 Telegram 而非 linux.do。
-2. `feeds/topic.py` —— 读单主题 RSS，选首帖 + 含 GitHub 链接的回复。HTML→文本用 stdlib `html.parser`。
-3. `feeds/xml_safe.py` —— **不要假定 `defusedxml` 在 Pyodide 下可用**（`[UNKNOWN]`，未在文档、Pyodide 索引或任何官方示例中出现，且 2021 年后未发版）。用 stdlib `xml.etree.ElementTree`，加上：字节上限、解析前拒绝前 4 KiB 含 `<!DOCTYPE` 或 `<!ENTITY` 的输入。
-4. `persistence/write_repository.py` —— `batch()` 幂等 upsert。
+四件容易改错的事：
+
+- **状态机是 4 态，且写入侧与选择侧必须同时改。** `ready`（出生）-> `classifying`
+  （claim）-> `published` / `not_relevant` / `failed`。`UPSERT_DISCOVERED_TOPIC_SQL`
+  里的 `'ready'` 字面量和 `DUE_TOPICS_SQL` 的 `status = 'ready'` 是同一个决定写在两
+  个文件里：只改一边，每一行都会落进没人选的状态，**不报错、不分类、永远如此**。
+  `discovered` / `fetching` 已废弃但仍是合法值，所以删除它们不需要迁移。
+
+- **全非 include 结算成 `not_relevant`，不是 `published`。** `read_queries.py` 只按
+  `status = 'published'` 暴露主题，发布一个零 mention 的主题就是在公开列表里放一张空卡片。
+- **失败必须落库，而落库本身不许抛。** `_record_topic_failure` 跑在 per-topic 隔离块里，
+  它自己 try 住一切并只记日志：如果它抛了，异常会逃出 `process` 把同批其余主题一起带走，
+  正好毁掉这个结构存在的意义。主题保留租约，等租约过期被回收。
+- **重试预算的数字在 `sync.py`**：`MAX_ATTEMPTS = 5`、`RETRY_BASE_SECONDS = 300`、
+  `LEASE_SECONDS = 900`。`attempts` 由 `CLAIM_TOPIC_SQL` 递增，计的是**抢占次数**而非失败次数。
+  退避在 Python 侧算，不在 SQL 里——SQLite 的 `datetime()` 不输出毫秒，会破坏全库统一的
+  ISO 8601 毫秒 TEXT 比较。见 `.trellis/spec/backend/error-handling.md` 的 "The numbers"。
+
+LLM 边界已完成并已接上调用方：`classifier.py`（分类业务）+ `llm/`（三协议 wire 适配器
+`LLM_PROTOCOL`、三档 schema 降级 `LLM_SCHEMA_MODE`、候选仓库白名单、Pydantic 二次校验）。
+见 `docs/adr/0005-llm-multi-protocol.md`。
+
+`feeds/`（`tag_feed.py` / `rss.py` / `xml_safe.py` / `html_text.py`）与
+`persistence/write_repository.py` 也都已实现并有纯层测试覆盖。
+
+**真正还缺的是 Worker 层测试**（`@pytest.mark.worker`，见上一节）：JsProxy 转换、
+`batch()` 原子性、ASGI 与 cron 共存、以及下面三个 `[UNKNOWN]`，都只有在真运行时里才能验证。
 
 ## 三个 `[UNKNOWN]`，都要 spike 验证
 
-1. **部署后 Worker 出网连通性**。`spikes/egress/` 已备好，先跑它。**必须看部署后的 URL**，`pywrangler dev` 可能从开发机出网从而掩盖封锁。
+1. **部署后 Worker 出网连通性**。`spikes/egress/` 已备好，先跑它。**必须看部署后的 URL**，`pywrangler dev` 可能从开发机出网从而掩盖封锁。本机对 linux.do 全路径 403，但把 `TAG_FEED_URL` 指向别的 Discourse 实例（如 `meta.discourse.org`）可以在本地端到端验证解析与分类 —— 期望 host 由该 URL 推导，没有硬编码。
 2. **`workers.fetch` 的超时机制**。它没有 timeout 选项。`adapters/http.py` 叠了两层：`signal=AbortSignal.timeout(ms)`（kwargs 原样进 JS `RequestInit`，workerd 里有这个 API，但无任何 Python 侧文档或示例）+ `asyncio.wait_for` 外层兜底。第一层是否生效要在部署后的 Worker 上验证。
 3. **自定义 LLM 端点是否真支持 strict 结构化输出**。ADR 0005 明确**不做**运行时能力探测（Worker 无状态，探测结果无处缓存；且"探测失败就换档"正是被禁止的静默回退）。端点不支持时把 `LLM_SCHEMA_MODE` 配成 `json_object` 或 `none`——防幻觉保证不变，因为它靠的是 `_reject_unknown_and_duplicate()` 而不是 schema。**这一项现在可绕开，但仍未被验证**：部署前应人工验证真实端点，再据此定档。

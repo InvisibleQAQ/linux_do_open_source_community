@@ -120,7 +120,7 @@ VALID_DECISIONS = {
 
 def make_settings(**overrides: Any) -> Settings:
     values: dict[str, Any] = {
-        "channel_feed_url": "https://rsshub.example/telegram/channel/linux_do_channel",
+        "tag_feed_url": "https://forum.example/tag/oss/42.rss",
         "llm_base_url": "https://api.example.com/v1",
         "llm_model": "gpt-test",
         "llm_api_key": API_KEY,

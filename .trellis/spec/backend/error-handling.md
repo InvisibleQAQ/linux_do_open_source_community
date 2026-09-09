@@ -60,15 +60,24 @@ Isolation is per task, inside the worker coroutine — not
 async def process(topic_id: int) -> None:
     async with semaphore:
         try:
-            await _process_topic(db, settings, topic_id)
+            if await _process_topic(db, settings, topic_id):
+                counters.published += 1
             counters.processed += 1
         except Exception as error:
             logger.warning("topic %s failed: %s", topic_id, type(error).__name__)
-            counters.record_failure(topic_id, type(error).__name__)
+            counters.record_failure(topic_id, _failure_label(error))
+            await _record_topic_failure(db, topic_id, error)
 ```
 
 Catching at the task means the failure is counted and categorised while the topic
 id is still in scope, and `gather` never sees an exception to propagate.
+
+The PRD says a per-topic failure is *persisted*, not merely counted, so
+`_record_topic_failure` runs inside this block — and therefore may not raise. A D1
+write that failed there would escape `process` and take the rest of the claimed
+batch with it, destroying the guarantee this structure exists to provide. It logs
+and returns instead; the topic keeps its lease and is reclaimed when the lease
+expires, so nothing is lost permanently.
 
 ---
 
@@ -83,6 +92,32 @@ memory: the isolate does not survive between runs.
 
 A permanent validation failure is recorded without a `retry_after`, so it is not
 picked up again.
+
+### The numbers
+
+`sync.py` owns them as `MAX_ATTEMPTS = 5`, `RETRY_BASE_SECONDS = 300` and
+`LEASE_SECONDS = 900`. `CONTEXT.md` names the two concepts (Retry Budget, Claim
+Lease).
+
+| | Value | Why this value |
+|---|---|---|
+| Attempt cap | 5 claims | Counts *claims*, not failures: `CLAIM_TOPIC_SQL` increments `attempts`, so the topic being processed is already at its own number |
+| Backoff | 300s x 2^(attempts-1) → 5/10/20/40 min | Starts at the cron interval because nothing shorter is observable — no run fires in between to pick the topic up |
+| Lease | 900s | The Worker wall-clock ceiling. A shorter lease lets the *next* cron run reclaim a topic this run is still processing |
+
+Retryability is read off the exception (`FetchError.retryable`,
+`ClassifierError.retryable`), never decided by the caller. An exception carrying no
+such flag is treated as permanent: those are code or data defects, and a retry
+reproduces them while spending budget.
+
+Both "not retryable" and "budget exhausted" are written the same way — no
+`retry_after` at all. `DUE_TOPICS_SQL` compares `retry_after <= ?` and NULL never
+satisfies it, so a permanently broken topic stops costing subrequests without
+needing a status value of its own.
+
+The backoff is computed in Python, not in SQL. SQLite's `datetime()` emits no
+milliseconds, and every timestamp in this schema is compared as TEXT in one ISO
+8601 millisecond format — see `database-guidelines.md`.
 
 ---
 

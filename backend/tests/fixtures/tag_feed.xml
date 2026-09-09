@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Forum - Topics tagged oss</title>
+    <link>https://forum.example/tag/oss/42</link>
+    <description>Topics tagged oss</description>
+    <language>zh-CN</language>
+    <lastBuildDate>Mon, 08 Sep 2026 10:00:00 +0000</lastBuildDate>
+    <atom:link href="https://forum.example/tag/oss/42.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>分享一个好用的命令行工具</title>
+          <dc:creator><![CDATA[alice]]></dc:creator>
+          <category>资源分享</category>
+          <description><![CDATA[
+            <p>最近发现了 <a href="https://github.com/owner/repo" rel="noopener nofollow ugc">owner/repo</a>，非常好用。</p>
+            <pre><code class="lang-bash">npm install repo</code></pre>
+            <p><small>26 个帖子 - 9 位用户</small></p>
+            <p><a href="https://forum.example/t/topic/1001">阅读完整话题</a></p>
+          ]]></description>
+          <link>https://forum.example/t/topic/1001</link>
+          <pubDate>Sun, 07 Sep 2026 21:00:11 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <guid isPermaLink="false">forum.example-topic-1001</guid>
+          <source url="https://forum.example/t/topic/1001.rss">分享一个好用的命令行工具</source>
+        </item>
+        <item>
+          <title>An older thread that someone just bumped</title>
+          <dc:creator><![CDATA[bob]]></dc:creator>
+          <category>Feature</category>
+          <description><![CDATA[
+            <p>See <a href="https://github.com/other/tool">other/tool</a> and its mirror at
+            <a href="https://github.com/owner/repo/tree/main">owner/repo</a>.</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.example/t/topic/1002">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.example/t/topic/1002</link>
+          <pubDate>Tue, 07 May 2024 11:04:55 +0000</pubDate>
+          <guid isPermaLink="false">forum.example-topic-1002</guid>
+          <source url="https://forum.example/t/topic/1002.rss">An older thread that someone just bumped</source>
+        </item>
+        <item>
+          <title>只是闲聊，没有仓库链接</title>
+          <dc:creator><![CDATA[carol]]></dc:creator>
+          <description><![CDATA[
+            <p>今天天气不错，随便聊聊。</p>
+            <p><small>1 个帖子 - 1 位用户</small></p>
+            <p><a href="https://forum.example/t/topic/1003">阅读完整话题</a></p>
+          ]]></description>
+          <link>https://forum.example/t/topic/1003</link>
+          <pubDate>Mon, 08 Sep 2026 09:30:00 +0000</pubDate>
+          <guid isPermaLink="false">forum.example-topic-1003</guid>
+          <source url="https://forum.example/t/topic/1003.rss">只是闲聊，没有仓库链接</source>
+        </item>
+  </channel>
+</rss>

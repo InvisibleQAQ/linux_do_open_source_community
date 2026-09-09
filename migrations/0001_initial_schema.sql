@@ -56,9 +56,18 @@ CREATE TABLE topics (
   author            TEXT,
   published_at      TEXT,
 
-  -- 'discovered' | 'fetching' | 'ready' | 'classifying' | 'published'
-  -- | 'not_relevant' | 'failed'
-  status            TEXT    NOT NULL DEFAULT 'discovered',
+  -- 'ready' | 'classifying' | 'published' | 'not_relevant' | 'failed'
+  --
+  -- A topic is BORN 'ready': the tag feed delivers the row and the first post's
+  -- text in one item, so there is no state in which a topic is known and its text
+  -- is not. That is why the default is the claimable status rather than a
+  -- pre-claim one — a row inserted without an explicit status still means
+  -- "stored, awaiting judgement", which is the only thing it can mean.
+  --
+  -- The default is load-bearing in the other direction too: `DUE_TOPICS_SQL`
+  -- selects on 'ready', so a default naming any other status would put every such
+  -- row in a state nothing selects — no error, no classification, forever.
+  status            TEXT    NOT NULL DEFAULT 'ready',
   attempts          INTEGER NOT NULL DEFAULT 0,
   -- Earliest time a 'failed' row may be claimed again. NULL means "not scheduled".
   retry_after       TEXT,

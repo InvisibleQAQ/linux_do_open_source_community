@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Forum - Topics tagged oss</title>
+    <link>https://forum.example/tag/oss/42</link>
+        <item>
+          <title>Lookalike host in the guid</title>
+          <description><![CDATA[<p>See <a href="https://github.com/evil/one">evil/one</a>.</p>]]></description>
+          <link>https://forum.example.evil.test/t/topic/2001</link>
+          <pubDate>Mon, 08 Sep 2026 09:00:00 +0000</pubDate>
+          <guid isPermaLink="false">forum.example.evil.test-topic-2001</guid>
+        </item>
+        <item>
+          <title>Host is a prefix of the expected one</title>
+          <description><![CDATA[<p>See <a href="https://github.com/evil/two">evil/two</a>.</p>]]></description>
+          <link>https://forum.exampleX/t/topic/2002</link>
+          <pubDate>Mon, 08 Sep 2026 09:01:00 +0000</pubDate>
+          <guid isPermaLink="false">forum.exampl-topic-2002</guid>
+        </item>
+        <item>
+          <title>No guid at all</title>
+          <description><![CDATA[<p>See <a href="https://github.com/evil/three">evil/three</a>.</p>]]></description>
+          <link>https://forum.example/t/topic/2003</link>
+          <pubDate>Mon, 08 Sep 2026 09:02:00 +0000</pubDate>
+        </item>
+        <item>
+          <title>Empty description</title>
+          <description><![CDATA[]]></description>
+          <link>https://forum.example/t/topic/2004</link>
+          <pubDate>Mon, 08 Sep 2026 09:03:00 +0000</pubDate>
+          <guid isPermaLink="false">forum.example-topic-2004</guid>
+        </item>
+        <item>
+          <title>Non numeric id</title>
+          <description><![CDATA[<p>See <a href="https://github.com/evil/four">evil/four</a>.</p>]]></description>
+          <link>https://forum.example/t/topic/abc</link>
+          <pubDate>Mon, 08 Sep 2026 09:04:00 +0000</pubDate>
+          <guid isPermaLink="false">forum.example-topic-abc</guid>
+        </item>
+        <item>
+          <title>Zero id</title>
+          <description><![CDATA[<p>See <a href="https://github.com/evil/five">evil/five</a>.</p>]]></description>
+          <link>https://forum.example/t/topic/0</link>
+          <pubDate>Mon, 08 Sep 2026 09:05:00 +0000</pubDate>
+          <guid isPermaLink="false">forum.example-topic-0</guid>
+        </item>
+        <item>
+          <title>Good topic, first occurrence</title>
+          <description><![CDATA[<p>Real one, see <a href="https://github.com/good/repo">good/repo</a>.</p>]]></description>
+          <link>https://forum.example/t/topic/2007</link>
+          <pubDate>Mon, 08 Sep 2026 09:06:00 +0000</pubDate>
+          <guid isPermaLink="false">forum.example-topic-2007</guid>
+        </item>
+        <item>
+          <title>Same topic id again, must be ignored</title>
+          <description><![CDATA[<p>Impostor, see <a href="https://github.com/evil/six">evil/six</a>.</p>]]></description>
+          <link>https://forum.example/t/topic/2007</link>
+          <pubDate>Mon, 08 Sep 2026 09:07:00 +0000</pubDate>
+          <guid isPermaLink="false">forum.example-topic-2007</guid>
+        </item>
+  </channel>
+</rss>

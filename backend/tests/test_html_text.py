@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 
 from linuxdo_oss.domain.github_url import extract_repository_candidates
-from linuxdo_oss.feeds.html_text import extract_links, html_to_text
+from linuxdo_oss.feeds.html_text import html_to_text
 
 # ----------------------------------------------------------------------
 # html_to_text
@@ -143,50 +143,3 @@ def test_script_body_does_not_reach_the_text() -> None:
 
     assert text == "正文"
     assert "evil.example" not in text
-
-
-# ----------------------------------------------------------------------
-# extract_links
-# ----------------------------------------------------------------------
-
-LINK_CASES = [
-    ("", []),
-    ("no links here", []),
-    ('<a href="https://github.com/o/r">x</a>', ["https://github.com/o/r"]),
-    # Document order, first occurrence wins, duplicates collapsed.
-    (
-        '<a href="https://b.example/">b</a><a href="https://a.example/">a</a>'
-        '<a href="https://b.example/">b again</a>',
-        ["https://b.example/", "https://a.example/"],
-    ),
-    # Kept verbatim: this module does not get to decide what a caller may accept.
-    ('<a href="/t/topic/1">x</a>', ["/t/topic/1"]),
-    ('<a href="mailto:a@example.com">x</a>', ["mailto:a@example.com"]),
-    # The case that justifies this function: character references in an attribute
-    # value are decoded here and are invisible to a regex over the raw markup.
-    (
-        '<a href="https://github.com&#x2F;owner&#x2F;repo">点这里</a>',
-        ["https://github.com/owner/repo"],
-    ),
-    ('<a href="https://example.com/?a=1&amp;b=2">x</a>', ["https://example.com/?a=1&b=2"]),
-    # Surrounding whitespace is not part of a URL; an empty or bare href is not one.
-    ('<a href="  https://example.com/  ">x</a>', ["https://example.com/"]),
-    ('<a href="">x</a>', []),
-    ("<a href>x</a>", []),
-    ("<a>x</a>", []),
-    # Only <a href>. An <img src> on github.com is a badge or a raw asset, and
-    # admitting it would manufacture a candidate the author never linked.
-    ('<img src="https://github.com/o/r/raw/main/logo.png">', []),
-    ('<link href="https://github.com/o/r">', []),
-    # Injected markup inside a skipped element is not a link the author wrote.
-    ('<script><a href="https://github.com/evil/repo">x</a></script>', []),
-    ('<style><a href="https://github.com/evil/repo">x</a></style>', []),
-    # Broken markup still yields the href.
-    ('<a href="https://example.com/">unclosed', ["https://example.com/"]),
-    ('<a href="https://example.com/"/>', ["https://example.com/"]),
-]
-
-
-@pytest.mark.parametrize(("html", "expected"), LINK_CASES)
-def test_extract_links(html: str, expected: list[str]) -> None:
-    assert extract_links(html) == expected

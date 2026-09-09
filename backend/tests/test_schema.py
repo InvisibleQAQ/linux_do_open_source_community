@@ -17,6 +17,9 @@ from pathlib import Path
 
 import pytest
 
+from linuxdo_oss.persistence.write_repository import RECLAIM_EXPIRED_LEASES_SQL
+from linuxdo_oss.sync import CLAIM_TOPIC_SQL
+
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 NOW = "2026-08-31T15:00:00.000Z"
@@ -29,13 +32,20 @@ REPO_URL = "https://github.com/octocat/hello-world"
 # A single conditional UPDATE is the whole claim mechanism: D1 has no interactive
 # transactions, so read-then-write would race. `changes()` tells us whether this
 # run won the row.
-CLAIM_SQL = """
-UPDATE topics
-   SET status = 'fetching', lease_expires_at = ?, attempts = attempts + 1
- WHERE topic_id = ?
-   AND (status = 'discovered' OR (status = 'failed' AND retry_after <= ?))
-   AND (lease_expires_at IS NULL OR lease_expires_at < ?)
-"""
+#
+# Imported, never restated. A local copy of this SQL is how a test keeps passing
+# after production stops agreeing with it — which is exactly what a second copy
+# did through the `discovered`/`fetching` removal.
+CLAIM_SQL = CLAIM_TOPIC_SQL
+
+
+# Parameter order belongs to the statement, so it is named once here rather than
+# spelled out at five call sites.
+def claim_params(
+    *, lease_until: str = LATER, now: str = NOW, topic_id: int = TOPIC_ID
+) -> tuple[str, str, int, str, str]:
+    return (lease_until, now, topic_id, now, now)
+
 
 UPSERT_PROJECT_SQL = """
 INSERT INTO projects (canonical_url, owner, repo, display_name, summary, created_at, updated_at)
@@ -72,7 +82,7 @@ def db() -> sqlite3.Connection:
 
 
 def insert_topic(
-    db: sqlite3.Connection, *, status: str = "discovered", retry_after: str | None = None
+    db: sqlite3.Connection, *, status: str = "ready", retry_after: str | None = None
 ) -> None:
     db.execute(
         "INSERT INTO topics (topic_id, canonical_url, status, retry_after,"
@@ -202,7 +212,7 @@ def test_one_project_many_topics(db: sqlite3.Connection) -> None:
     db.execute(
         "INSERT INTO topics (topic_id, canonical_url, status, discovered_at,"
         " updated_at) VALUES (?, ?, ?, ?, ?)",
-        (other_topic_id, f"https://linux.do/t/topic/{other_topic_id}", "discovered", NOW, NOW),
+        (other_topic_id, f"https://linux.do/t/topic/{other_topic_id}", "ready", NOW, NOW),
     )
 
     first_post = insert_post(db, 1, "guid-1")
@@ -236,10 +246,10 @@ def test_one_project_many_topics(db: sqlite3.Connection) -> None:
 def test_only_one_run_can_claim_a_topic(db: sqlite3.Connection) -> None:
     insert_topic(db)
 
-    db.execute(CLAIM_SQL, (LATER, TOPIC_ID, NOW, NOW))
+    db.execute(CLAIM_SQL, claim_params())
     first = db.execute("SELECT changes()").fetchone()[0]
 
-    db.execute(CLAIM_SQL, (LATER, TOPIC_ID, NOW, NOW))
+    db.execute(CLAIM_SQL, claim_params())
     second = db.execute("SELECT changes()").fetchone()[0]
 
     assert first == 1, "the first run must win the row"
@@ -251,14 +261,12 @@ def test_an_expired_lease_becomes_claimable_again(db: sqlite3.Connection) -> Non
     """A crashed run must not park a topic forever."""
     insert_topic(db)
     db.execute(
-        "UPDATE topics SET status = 'fetching', lease_expires_at = ?", ("2026-08-31T14:00:00.000Z",)
+        "UPDATE topics SET status = 'classifying', lease_expires_at = ?",
+        ("2026-08-31T14:00:00.000Z",),
     )
 
-    db.execute(
-        "UPDATE topics SET status = 'discovered' WHERE lease_expires_at < ?",
-        (NOW,),
-    )
-    db.execute(CLAIM_SQL, (LATER, TOPIC_ID, NOW, NOW))
+    db.execute(RECLAIM_EXPIRED_LEASES_SQL, (NOW, NOW))
+    db.execute(CLAIM_SQL, claim_params())
 
     assert db.execute("SELECT changes()").fetchone()[0] == 1
 
@@ -266,10 +274,10 @@ def test_an_expired_lease_becomes_claimable_again(db: sqlite3.Connection) -> Non
 def test_a_failed_topic_is_not_claimable_before_its_retry_time(db: sqlite3.Connection) -> None:
     insert_topic(db, status="failed", retry_after="2026-08-31T16:00:00.000Z")
 
-    db.execute(CLAIM_SQL, (LATER, TOPIC_ID, NOW, NOW))
+    db.execute(CLAIM_SQL, claim_params())
     assert db.execute("SELECT changes()").fetchone()[0] == 0
 
-    db.execute(CLAIM_SQL, (LATER, TOPIC_ID, "2026-08-31T17:00:00.000Z", NOW))
+    db.execute(CLAIM_SQL, claim_params(now="2026-08-31T17:00:00.000Z"))
     assert db.execute("SELECT changes()").fetchone()[0] == 1
 
 

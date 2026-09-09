@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/09-08-linux-do-tag-rss/research/discourse-tag-rss.md", "reason": "核对解析器行为是否与实测的 feed 结构一致，尤其固定尾巴剥离与 guid 取 id"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint / type / 测试覆盖门槛"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证畸形 item、host 不匹配、空 description 的失败路径均被隔离且可查询"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验证状态机 4 态收敛后 DUE/RECLAIM 查询自洽，无孤儿状态、无不可达行"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "确认 D1 schema 与 API 契约确实未被触碰，前端不受影响"}

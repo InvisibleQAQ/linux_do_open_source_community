@@ -40,7 +40,7 @@ def add_topic(
     db: sqlite3.Connection,
     topic_id: int,
     *,
-    status: str = "discovered",
+    status: str = "ready",
     retry_after: str | None = None,
     lease_expires_at: str | None = None,
 ) -> None:
@@ -96,7 +96,7 @@ def test_backlog_is_left_for_later_runs(db: sqlite3.Connection) -> None:
 
 def test_newly_discovered_topics_are_claimed_before_retries(db: sqlite3.Connection) -> None:
     add_topic(db, 1, status="failed", retry_after="2026-08-31T14:00:00.000Z")
-    add_topic(db, 2, status="discovered")
+    add_topic(db, 2, status="ready")
 
     assert due(db, 10) == [2, 1]
 
@@ -119,7 +119,7 @@ def test_claim_increments_attempts_and_sets_the_lease(db: sqlite3.Connection) ->
 
     row = db.execute("SELECT status, attempts, lease_expires_at, updated_at FROM topics").fetchone()
 
-    assert row["status"] == "fetching"
+    assert row["status"] == "classifying"
     assert row["attempts"] == 1
     assert row["lease_expires_at"] == LEASE_UNTIL
     assert row["updated_at"] == NOW
@@ -127,13 +127,13 @@ def test_claim_increments_attempts_and_sets_the_lease(db: sqlite3.Connection) ->
 
 def test_an_expired_lease_is_claimable_again(db: sqlite3.Connection) -> None:
     """A run that crashed mid-topic must not park it forever."""
-    add_topic(db, 1, status="discovered", lease_expires_at="2026-08-31T14:00:00.000Z")
+    add_topic(db, 1, status="ready", lease_expires_at="2026-08-31T14:00:00.000Z")
 
     assert claim(db, 1) == 1
 
 
 def test_an_unexpired_lease_blocks_a_claim(db: sqlite3.Connection) -> None:
-    add_topic(db, 1, status="discovered", lease_expires_at="2026-08-31T15:04:00.000Z")
+    add_topic(db, 1, status="ready", lease_expires_at="2026-08-31T15:04:00.000Z")
 
     assert claim(db, 1) == 0
 
@@ -145,10 +145,12 @@ def test_a_failed_topic_waits_for_its_backoff(db: sqlite3.Connection) -> None:
     assert claim(db, 1, now="2026-08-31T16:00:00.000Z") == 1
 
 
-@pytest.mark.parametrize("status", ["ready", "classifying", "published", "not_relevant"])
+@pytest.mark.parametrize("status", ["classifying", "published", "not_relevant"])
 def test_in_flight_and_settled_statuses_are_never_claimed(
     db: sqlite3.Connection, status: str
 ) -> None:
+    """'ready' is deliberately absent: it is now where a topic is BORN, not a state
+    it reaches mid-run, so it is the one status a claim must accept."""
     add_topic(db, 1, status=status)
 
     assert claim(db, 1) == 0

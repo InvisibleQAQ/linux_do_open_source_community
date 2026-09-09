@@ -29,10 +29,17 @@ Never read-then-write — there is no transaction to protect it, and two overlap
 cron runs would both claim the same topic.
 
 ```sql
-UPDATE topics SET status = 'fetching', lease_expires_at = ?, attempts = attempts + 1
- WHERE topic_id = ? AND (status = 'discovered' OR (status = 'failed' AND retry_after <= ?))
+UPDATE topics SET status = 'classifying', lease_expires_at = ?, attempts = attempts + 1
+ WHERE topic_id = ? AND (status = 'ready' OR (status = 'failed' AND retry_after <= ?))
    AND (lease_expires_at IS NULL OR lease_expires_at < ?)
 ```
+
+The claimable status is `ready`, which is where a topic is **born** —
+`save_discovered_topics` writes the row and its text together, so there is no
+state in which a topic is known but its text is not. That literal and
+`DUE_TOPICS_SQL`'s `status = 'ready'` are one decision written in two files:
+change either alone and every row lands in a status nothing selects, with no
+error and no classification, forever.
 
 Then inspect `meta.changes`: 1 means this run won the row, 0 means another run did.
 Verified in `backend/tests/test_sync_sql.py`.

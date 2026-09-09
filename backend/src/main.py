@@ -12,7 +12,13 @@ that are easy to get wrong:
 
 Signatures differ between the two handlers and both forms are mandatory:
 `fetch(self, request)` takes only the request, while
-`scheduled(self, controller, env, ctx)` takes all four parameters.
+`scheduled(self, controller, env, ctx)` must declare all four parameters or the
+runtime raises TypeError on invocation.
+
+But declaring `env` is not the same as receiving it: that parameter is measured to
+arrive as `None`. Bindings live on `self.env`, which is what `WorkerEntrypoint`
+documents, so the cron path reads `self.env` and passing the parameter through
+made `load_settings` fail on every single run.
 
 Imports here are ROOT-RELATIVE to this file's directory (`backend/src/`), which
 is why it is `from linuxdo_oss...` and never `from src.linuxdo_oss...`.
@@ -41,8 +47,14 @@ class Default(WorkerEntrypoint):
     async def scheduled(self, controller, env, ctx):
         """One bounded sync run, every 5 minutes.
 
-        `env` arrives as a parameter here — there is no request and therefore no
-        ASGI scope to read it from. That is why `run_sync` takes `env` explicitly
-        instead of reaching for a global.
+        `self.env`, not the `env` parameter: the parameter arrives as `None`
+        (measured against wrangler 4.129.1 with the bindings present and listed),
+        so `run_sync` would see no configuration at all and abort every run with
+        `missing required configuration: LLM_BASE_URL`.
+
+        The four parameters must still be declared — the runtime calls this with
+        all of them — they simply are not where the bindings are. `run_sync` takes
+        the env explicitly rather than reading a global because there is no request
+        here, and therefore no ASGI scope to read it from.
         """
-        await run_sync(env)
+        await run_sync(self.env)

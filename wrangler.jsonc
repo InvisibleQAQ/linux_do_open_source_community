@@ -99,8 +99,23 @@
   // and no automatic fallback — see docs/adr/0005-llm-multi-protocol.md.
   // config.py rejects an unknown value and a base URL of the wrong shape at
   // startup rather than defaulting.
+  // TAG_FEED_URL is the pipeline's ONLY input. It must be a Discourse list feed —
+  // `/tag/<slug>/<id>.rss`, or the identically shaped `/latest.rss` and
+  // `/c/<slug>.rss` — because each item's `<description>` carries the first post's
+  // complete cooked HTML. That is what removed the second request per topic; see
+  // docs/adr/0007-single-source-tag-feed.md.
+  //
+  // Two things are derived from this value, so it is validated at startup rather
+  // than at the first cron:
+  //   - the host every item's guid must match, which is what keeps a rewritten
+  //     feed from naming topics on a site that was never configured;
+  //   - `topics.canonical_url`, which the frontend renders as a link.
+  //
+  // https is required. Pointing this at a different Discourse instance is a
+  // supported way to exercise the whole pipeline from a machine that linux.do
+  // challenges.
   "vars": {
-    "CHANNEL_FEED_URL": "https://rsshub.rssforever.com/telegram/channel/linux_do_channel",
+    "TAG_FEED_URL": "https://linux.do/tag/2234-tag/2234.rss",
     "LLM_PROTOCOL": "responses",
     "LLM_SCHEMA_MODE": "strict",
     "LLM_BASE_URL": "https://api.openai.com/v1",

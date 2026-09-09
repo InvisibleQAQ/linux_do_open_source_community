@@ -20,8 +20,8 @@ Three rules make that robustness cheap rather than speculative:
     `pubDate`/`published`/`updated`/`dc:date`, `description`/`content:encoded`/
     `summary`/`content`), so downstream code reads one field name.
   * Anything not claimed by a named field goes into `extras` instead of being
-    dropped, and `item_text_fields` scans `extras` too. A generator that starts
-    emitting the topic link in a new element keeps working with no code change.
+    dropped, which is where `dc:creator` — Discourse's author element — arrives.
+    A generator that renames an element keeps working with no code change.
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ from linuxdo_oss.domain.timestamps import to_iso_utc
 
 __all__ = [
     "RssItem",
-    "item_text_fields",
     "parse_items",
     "rss_datetime_to_iso",
 ]
@@ -145,24 +144,6 @@ def rss_datetime_to_iso(value: str | None) -> str | None:
         # OverflowError: a year at the datetime bounds, where the shift to UTC
         # leaves the representable range.
         return None
-
-
-def item_text_fields(item: RssItem) -> list[str]:
-    """Every populated field of `item` that could contain a URL.
-
-    This is what the channel reader scans for linux.do topic links, and the reason
-    it must be a list rather than one nominated field: in the verified channel feed
-    the topic URL is inside `description` while `link` points at Telegram
-    (`https://t.me/linux_do_channel/...`). Scanning only `link` finds nothing.
-
-    `extras` is included so a generator change cannot silently stop discovery.
-    `pub_date` is excluded: an RFC 822 date cannot contain a URL, so running the
-    URL regex over it is pure CPU against a bounded cron budget.
-    """
-    values = [item.title, item.link, item.description, item.guid]
-    values.extend(text for _tag, text in item.extras)
-
-    return [value for value in values if value]
 
 
 # ----------------------------------------------------------------------

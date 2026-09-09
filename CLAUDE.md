@@ -1,6 +1,8 @@
 # Linux.do 开源项目聚合器
 
-自动采集 Linux.do 主题 RSS，用 LLM 整理原帖中**明确出现**的 GitHub 仓库，前端按主题聚合展示。
+自动采集 Linux.do 的 Discourse tag RSS，用 LLM 整理原帖中**明确出现**的 GitHub 仓库，前端按主题聚合展示。
+
+采集只有一次出网：tag feed 的每个 item 本身就带首帖全文，因此没有逐主题抓取。见 `docs/adr/0007-single-source-tag-feed.md`。
 
 需求与验收标准：`.trellis/tasks/08-31-cloudflare-stack-prd/prd.md`
 领域术语：`CONTEXT.md`（改术语必须同步这里）
@@ -136,7 +138,16 @@ wire 层在 `backend/src/linuxdo_oss/llm/`，一个协议一个模块；`classif
 | Worker 体积（gzip） | 3 MB | 10 MB |
 | Worker 启动时间 | 1 s | 1 s |
 
-**PRD 的设计需要 Workers Paid。** 单轮 20 主题 × (2 次 RSS + 1 次 LLM) ≈ 60 次子请求，已超 Free 的 50；Free 的 cron CPU 只有 10 ms，连解析 RSS 都不够。
+**PRD 的设计需要 Workers Paid。** 单轮 N 个主题（N = `SYNC_BATCH_SIZE`，默认 20）：
+
+* **出网** `1 次 RSS + ≤N 次 LLM`（无候选仓库的主题直接结算成 `not_relevant`，不调 LLM）
+* **D1** `6 + (3~4)N` 次 —— 固定 6 次是 open_run / reclaim / 查已知 id / 发现 batch / 查 due /
+  close_run；每主题 claim + `load_stored_posts` + 结算，结算走 publish 时是 2 次（`_post_ids` 再
+  加一次 batch）
+
+N=20 合计 **87~107 次**，远超 Free 的 50；Free 的 cron CPU 只有 10 ms，连解析 RSS 都不够。
+**D1 往返是大头，不是 LLM**，所以再省预算要从合并 D1 查询下手。删掉逐主题抓取省下的是每主题
+1 次 RSS，见 ADR 0007。
 
 由此推出两条编码约束：
 1. **并发上限 ≤ 6**（同时等待响应头的连接数上限）。
@@ -146,8 +157,15 @@ wire 层在 `backend/src/linuxdo_oss/llm/`，一个协议一个模块；`classif
 
 ## 未解决的发布前置项
 
-- **RSSHub 出网已验证**：spike Worker 通过 `workers.fetch` 拿到 HTTP 200 / `application/xml` / 21,731 字节真实 RSS。
-- `[UNKNOWN]` **linux.do 的部署后 Worker 出网未验证**。本机跑 `pywrangler dev` 得到 403 Cloudflare 挑战页，但那**不能作为证据**——`pywrangler dev` 从开发机出网，而本机 IP 正被挑战（三种 UA 全部 403，同网络 curl RSSHub 也超时）。项目所有者确认该源在其环境可用，管线按此推进。真正关闭这一项需要：
+- `[UNKNOWN]` **linux.do 的部署后 Worker 出网未验证**。本机跑 `pywrangler dev` 得到 403 Cloudflare 挑战页，但那**不能作为证据**——`pywrangler dev` 从开发机出网，而本机 IP 正被 linux.do 挑战。
+
+  2026-09-08 实测（**RSSHub 已不在链路中**，这里只剩一个源）：
+  - **linux.do 全路径从本机都是 403**：`GET https://linux.do/tag/2234-tag/2234.rss` 返回 7,100 字节挑战页，与 topic RSS 表现一致。
+
+  所以本地把 `TAG_FEED_URL` 指向 linux.do 时，cron 第一步就失败，到不了 `published`。
+  **但这不再等于本地无法验证**：期望 host 由 `TAG_FEED_URL` 推导而非硬编码，把它指向任一可达的
+  Discourse 实例（`https://meta.discourse.org/tag/rss.rss` 实测 200 / 81,541 字节）即可端到端跑通
+  解析 → 入库 → 分类。真正关闭这一项需要：
 
   ```bash
   cd spikes/egress && uv run pywrangler deploy --temporary   # 无需登录
@@ -155,9 +173,20 @@ wire 层在 `backend/src/linuxdo_oss/llm/`，一个协议一个模块；`classif
   ```
 
   部署后的 Worker 若仍返回 `Just a moment...`，说明 Cloudflare Worker egress 被 linux.do 真实拦截——这是应用代码无法绕过的阻塞项。
-- `[UNKNOWN]` 自定义 LLM 端点是否真的实现了 strict 结构化输出。**这一项现在可以绕开，但没有被验证。**
-  ADR 0005 的结论是不做运行时能力探测（Worker 无状态，探测结果无处缓存，且"探测失败就换档"正是被禁止的静默回退）；
+- `[UNKNOWN]` **`2234-tag` 这个 tag 的内容构成未经核实**：本机 403 取不到任何样本。整条管线的产出质量取决于这个 tag 选得对不对。
+- **strict 结构化输出已在一个真实端点上验证**（2026-09-08，`supercodes.vip/v1` + `gpt-5.6-terra`）。
+  发了与 `llm/responses.py::build_payload` 同形的请求：`text.format` 带 `strict: true` 和
+  `canonical_url` 的 `enum`，回来 HTTP 200 / `status: completed`，输出严格合 schema、enum 被遵守、
+  summary 是中文。所以 `LLM_SCHEMA_MODE=strict` 对这个端点是正确配置。
+
+  这条验证**绑定具体端点加模型**，换任何一个都要重跑一次——ADR 0005 不做运行时能力探测
+  （Worker 无状态，探测结果无处缓存，而"探测失败就换档"正是被禁止的静默回退）。
   端点不支持 strict 时，把 `LLM_SCHEMA_MODE` 配成 `json_object` 或 `none` 即可，防幻觉保证不变。
-  部署前仍应人工验证一次真实端点的行为，并据此把档位写进配置。
+
+  验证同一端点时顺带测出来的两件事，会浪费很多时间，记在这里：
+  - **`/v1` 必须写在 `LLM_BASE_URL` 里。** `responses` 协议只往 base 后面拼 `/responses`，不会补 `/v1`。
+    写成 `https://supercodes.vip` 会打到 `/responses`，返回 502。
+  - **`GET /v1/models` 的列表不可信。** 它只列了 `gpt-5.5` 和 `gpt-image-2`，而 `gpt-5.5` 实际请求返回 502，
+    列表里没有的 `gpt-5.6-terra` 才真正可用。别拿 `/models` 当模型是否可用的依据。
 
 顺带一个实测数字：Python Worker 本地冷启动前两次请求耗时 **27.6 s / 25.0 s**，热请求 551 ms / 832 ms。这正是把 `assets.run_worker_first` 限定在 `/api/*` 的理由——让普通页面访问完全不碰 Python。

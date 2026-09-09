@@ -15,6 +15,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 from linuxdo_oss.llm import (
     LLMProtocol,
@@ -37,7 +38,7 @@ MAX_CONCURRENCY_CEILING = 6
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    channel_feed_url: str
+    tag_feed_url: str
     llm_base_url: str
     llm_model: str
     llm_api_key: str
@@ -55,6 +56,33 @@ def _required(env: object, name: str) -> str:
     if not value:
         raise RuntimeError(f"missing required configuration: {name}")
     return str(value)
+
+
+def _tag_feed_url(env: object) -> str:
+    """The Discourse list feed to read, validated at startup rather than at cron.
+
+    Two checks, both because this value decides more than where a request goes.
+    `feeds/tag_feed.py` derives the expected host from it and refuses every item
+    that does not belong to that host, so a URL with no host would not merely fail
+    to fetch — it would disable the identity check that keeps a rewritten feed from
+    naming topics on a site we never configured.
+
+    https is required for the same reason `LLM_BASE_URL` requires it: the feed is
+    the sole input to everything this project publishes, and plaintext transport
+    would let a network position choose that input.
+
+    The URL itself is never logged. A self-hosted forum's feed URL can carry an
+    access key in its query string.
+    """
+    value = _required(env, "TAG_FEED_URL")
+
+    if not value.startswith("https://"):
+        raise RuntimeError("TAG_FEED_URL must be an https:// URL from deployment config")
+
+    if not urlsplit(value).hostname:
+        raise RuntimeError("TAG_FEED_URL has no host")
+
+    return value
 
 
 # PEP 695 syntax here, unlike `api/schemas.py`'s classic `Generic[T]`: that one is
@@ -160,7 +188,7 @@ def load_settings(env: object) -> Settings:
     concurrency = min(_number(env, "SYNC_CONCURRENCY", 4, int), MAX_CONCURRENCY_CEILING)
 
     return Settings(
-        channel_feed_url=_required(env, "CHANNEL_FEED_URL"),
+        tag_feed_url=_tag_feed_url(env),
         llm_base_url=root,
         llm_model=_required(env, "LLM_MODEL"),
         llm_api_key=_required(env, "LLM_API_KEY"),

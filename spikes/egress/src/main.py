@@ -1,8 +1,19 @@
 """Egress connectivity spike — a release prerequisite, not an optional check.
 
-The PRD flags it as `[UNKNOWN]` whether Linux.do and RSSHub accept Cloudflare
-Worker egress. If either rejects it, every line of ingestion code downstream is
-void, so this runs FIRST.
+It is `[UNKNOWN]` whether linux.do accepts Cloudflare Worker egress. Since
+ADR 0007 the tag feed is the pipeline's ONLY input, so if linux.do rejects
+Worker egress, every line of ingestion code downstream is void. This runs FIRST.
+
+Two URLs are probed, and the SECOND one is what makes the result readable:
+
+  * the real tag feed on linux.do — the thing that must work;
+  * the same kind of feed on `meta.discourse.org`, a Discourse instance with no
+    Cloudflare challenge in front of it.
+
+Without the control probe a failure is ambiguous. Both failing points at Worker
+egress or at this spike itself; only the first failing means linux.do is
+specifically refusing Cloudflare's network, which is the release blocker and is
+not something application code can work around.
 
 Deploy it and hit the deployed URL:
 
@@ -15,20 +26,22 @@ the developer's machine and happily return 200 for an origin that blocks
 Cloudflare's network — which would mask exactly the failure this spike exists to
 find.
 
-What to look for in the JSON:
-  * status 200 on both, with a sensible content-length -> proceed.
-  * 403 / 429 / an HTML challenge page -> the PRD's release blocker is real.
-    Report the status and the body preview before writing any reader code.
+Read the `verdict` field; `results.target` and `results.control` carry the
+evidence behind it. A `Just a moment...` body preview with status 403 on the
+target is the challenge page this spike exists to detect.
 """
 
 import json
 
 from workers import Response, WorkerEntrypoint, fetch
 
-CHANNEL_FEED_URL = "https://rsshub.rssforever.com/telegram/channel/linux_do_channel"
+# Keep in sync with `TAG_FEED_URL` in the root wrangler.jsonc.
+TAG_FEED_URL = "https://linux.do/tag/2234-tag/2234.rss"
 
-# Any real topic id works. Replace if this one is deleted.
-TOPIC_FEED_URL = "https://linux.do/t/topic/2837720.rss"
+# The control. Reachable from an ordinary network (verified 2026-09-08: HTTP 200,
+# application/rss+xml, 81,541 bytes), so a failure HERE means the problem is not
+# linux.do.
+CONTROL_FEED_URL = "https://meta.discourse.org/tag/rss.rss"
 
 
 async def probe(url: str) -> dict:
@@ -65,11 +78,21 @@ class Default(WorkerEntrypoint):
     async def fetch(self, request):
         # Sequential, not gathered: two probes, and a sequential run makes it
         # obvious which origin produced which result if one hangs.
-        results = [await probe(CHANNEL_FEED_URL), await probe(TOPIC_FEED_URL)]
+        target = await probe(TAG_FEED_URL)
+        control = await probe(CONTROL_FEED_URL)
 
         payload = {
-            "all_ok": all(result["ok"] for result in results),
-            "results": results,
+            "all_ok": target["ok"] and control["ok"],
+            # The whole point of the control probe: name the conclusion rather
+            # than leaving the reader to infer it from two status codes.
+            "verdict": (
+                "tag feed reachable from Worker egress"
+                if target["ok"]
+                else "linux.do refuses Cloudflare Worker egress — release blocker"
+                if control["ok"]
+                else "both failed: suspect Worker egress or this spike, not linux.do"
+            ),
+            "results": {"target": target, "control": control},
         }
 
         return Response(

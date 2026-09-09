@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/09-08-linux-do-tag-rss/research/discourse-tag-rss.md", "reason": "tag RSS 的实测结构：description 含首帖完整 cooked HTML、guid 形如 {host}-topic-{id}、固定尾巴两段、bumped_at 排序、30 条无分页。新解析器的唯一事实依据"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 feeds/tag_feed.py、删除 feeds/topic.py 抓取路径，模块归属与命名需符合既有分层"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "改动 DUE_TOPICS_SQL、RECLAIM_EXPIRED_LEASES_SQL、_TOPIC_ROW 状态字面量，且正文写入时机前移到发现阶段"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "畸形 item 跳过而不使整轮失败；失败分类要落进 sync_runs.error_summary；错误串不得含未截断上游载荷"}
+{"file": ".trellis/spec/backend/environment-configuration.md", "reason": "CHANNEL_FEED_URL 改名 TAG_FEED_URL，涉及 config.py 校验、wrangler.jsonc vars、.env 与 .env.example 的一致性"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "发现/跳过/分类各阶段的日志级别与字段约定"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "核心是复用 TopicFeed/RetainedPost 数据结构与 html_text/rss 解析，只换生产者，禁止另起一套平行结构"}

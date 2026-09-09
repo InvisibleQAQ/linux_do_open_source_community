@@ -54,28 +54,35 @@ this call's project list, raises `WriteError`. Requiring every mention to name a
 project in the same call is what makes the sub-select in step 2 provably non-NULL.
 
 **If the run dies anyway**, at any point: the batch rolled back or never ran, the
-`topics` row is still `fetching`/`ready` holding a lease, and
-`reclaim_expired_leases` returns it to `discovered` once that lease expires. The
-next run redoes the topic from the start, and every step of that redo is an upsert
-against a unique constraint, so the second attempt produces the same rows as the
-first — no duplicate posts, projects or mentions.
+`topics` row is still `classifying` holding a lease, and `reclaim_expired_leases`
+returns it to `ready` once that lease expires. The next run redoes the topic from
+the start, and every step of that redo is an upsert against a unique constraint,
+so the second attempt produces the same rows as the first — no duplicate posts,
+projects or mentions.
 
 ---
 
 ## States this module writes
 
-`discovered` (upsert_discovered_topics) -> `fetching` (claim_topic) -> `ready`
-(save_topic_posts) -> `published` | `not_relevant` | `failed`.
+`ready` (save_discovered_topics) -> `classifying` (claim_topic) ->
+`published` | `not_relevant` | `failed`.
 
-`classifying` is enumerated by the schema but never written: it would cost a D1
-round trip per topic to record a state no reader consumes, and the lease reaper
-already treats it exactly like `ready`, so adding the transition later needs no
-migration.
+Four states, not the original six. `discovered` and `fetching` named the gap
+between knowing a topic exists and holding its text; a Discourse tag feed delivers
+both in one item, so the gap closed and the two statuses that described it have
+nothing left to mean. They remain legal values in the schema and are simply never
+written, which is why dropping them cost no migration.
+
+`ready` therefore means "text stored, not yet judged" rather than the former
+"fetched, not yet judged", and it is where a row is born. Its selection in
+`DUE_TOPICS_SQL` and its literal in `UPSERT_DISCOVERED_TOPIC_SQL` are one decision
+written in two files: change either alone and every row lands in a status nothing
+selects, which is silent — no error, no rows, no classification, forever.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -87,32 +94,36 @@ from linuxdo_oss.persistence.d1 import (
     clamp_text,
     execute,
     query_all,
+    query_one,
 )
 
 __all__ = [
     "MAX_ERROR_BYTES",
     "MAX_EXCERPT_BYTES",
-    "TOPIC_URL_TEMPLATE",
+    "DiscoveredTopic",
     "MentionInsert",
     "PostRow",
     "ProjectUpsert",
+    "StoredPost",
     "WriteError",
     "claim_topic",
     "close_run",
     "list_due_topics",
+    "load_stored_posts",
     "mark_failed",
     "mark_not_relevant",
     "open_run",
     "publish_topic_result",
     "reclaim_expired_leases",
-    "save_topic_posts",
-    "upsert_discovered_topics",
+    "save_discovered_topics",
+    "topic_attempts",
 ]
 
-# `topics.canonical_url` — the display link, floor suffix stripped. Built from a
-# numeric id the canonicalizer has already validated; an arbitrary user-controlled
-# URL is never persisted or fetched.
-TOPIC_URL_TEMPLATE = "https://linux.do/t/topic/{topic_id}"
+# `topics.canonical_url` arrives already built by `feeds/tag_feed.py`, from the
+# host in `TAG_FEED_URL` and an id validated out of the item's guid. It is not
+# assembled here from a hard-coded host any more: the pipeline reads whichever
+# Discourse instance is configured, and a constant would silently mislabel every
+# row the moment that is not linux.do.
 
 # Bounded diagnostics. `topics.last_error` shares the 2000-byte budget that
 # `RunCounters.summary()` uses for `sync_runs.error_summary`, so one oversized
@@ -145,7 +156,7 @@ class WriteError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class PostRow:
-    """One retained post, as the topic feed reader produced it.
+    """One retained post, as the tag feed reader produced it.
 
     `post_number` is the identity within the topic and the fallback identity when
     the feed carries no GUID, so it is required while everything descriptive is
@@ -159,6 +170,32 @@ class PostRow:
     guid: str | None = None
     author: str | None = None
     published_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveredTopic:
+    """One topic and its text, as the tag feed reader produced it.
+
+    Declared here rather than reusing `feeds/tag_feed.py::TopicFeed` so that
+    `persistence/` keeps its back to `feeds/`: the write layer is told what to
+    store, it does not learn where rows come from. `sync.py` owns the conversion,
+    which is the same arrangement `PostRow` already had.
+    """
+
+    topic_id: int
+    canonical_url: str
+    title: str | None
+    author: str | None
+    published_at: str | None
+    posts: Sequence[PostRow]
+
+
+@dataclass(frozen=True, slots=True)
+class StoredPost:
+    """A post read back for classification — only the two fields that decide it."""
+
+    post_number: int
+    text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,15 +233,57 @@ class MentionInsert:
 # parameter count (`_params_per_row` counts the placeholders), so a column added
 # to one of these cannot silently break the chunk arithmetic.
 
-_TOPIC_ROW = "(?, ?, 'discovered', ?, ?)"
+_TOPIC_ROW = "(?, ?, ?, ?, ?, 'ready', ?, ?)"
 
-# DO NOTHING, never DO UPDATE: a topic seen again in the channel feed must keep
-# whatever status it has reached. Resetting it to 'discovered' would reprocess
-# every published topic on every run, forever.
+# A topic is born 'ready', not 'discovered'. The tag feed delivers the first post's
+# full text in the same response that announces the topic, so there is no state in
+# which a row is known but its text is not — the two former statuses 'discovered'
+# and 'fetching' described a fetch step that no longer exists. `DUE_TOPICS_SQL`
+# selects on 'ready', and changing one of these without the other silently parks
+# every row: a status nothing selects is a topic nothing ever classifies.
+#
+# Metadata is written here rather than by a later UPDATE for the same reason. It
+# arrives with the text, and `published_at` is the public feed's sort key, so a row
+# that existed without it would be orderable only by accident.
+#
+# DO NOTHING, never DO UPDATE: the feed is ordered by last activity, so an old
+# topic reappears at the top whenever anyone replies to it. DO UPDATE would rewrite
+# a published topic's text on every such bump — re-running the classifier's inputs
+# under a settled result — and resetting the status would reprocess the entire
+# backlog on every run, forever.
 UPSERT_DISCOVERED_TOPIC_SQL = """
-INSERT INTO topics (topic_id, canonical_url, status, discovered_at, updated_at)
+INSERT INTO topics
+  (topic_id, canonical_url, title, author, published_at, status, discovered_at, updated_at)
 VALUES {values}
 ON CONFLICT (topic_id) DO NOTHING
+"""
+
+# The ids of topics already known, so a bump does not rewrite settled rows. One
+# query for the whole feed rather than one per topic: D1 round trips count against
+# the subrequest budget, and thirty of them would buy nothing over a single IN.
+EXISTING_TOPIC_IDS_SQL = """
+SELECT topic_id FROM topics WHERE topic_id IN ({placeholders})
+"""
+
+# `post_number` -> `post_id`, for resolving mention targets at publish time.
+# Deliberately not merged with STORED_POSTS_SQL below: publishing does not need
+# the text, and `cleaned_text` is by far the widest column on this table.
+POST_IDS_SQL = """
+SELECT post_number, post_id
+  FROM topic_posts
+ WHERE topic_id = ?
+ ORDER BY post_number ASC
+"""
+
+# What `_process_topic` classifies. Read back from D1 rather than carried in memory
+# from the feed read, and that is deliberate: a topic retried after a failure may
+# have long fallen out of the thirty-item window, so an in-memory path would work
+# for fresh topics and quietly break for retried ones. One code path, one source.
+STORED_POSTS_SQL = """
+SELECT post_number, cleaned_text
+  FROM topic_posts
+ WHERE topic_id = ?
+ ORDER BY post_number ASC
 """
 
 _POST_ROW = "(?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -223,26 +302,6 @@ ON CONFLICT (topic_id, post_number) DO UPDATE SET
   source_url    = excluded.source_url,
   cleaned_text  = excluded.cleaned_text,
   is_first_post = excluded.is_first_post
-"""
-
-# COALESCE, not assignment: a re-run whose feed no longer carries a title must not
-# erase the title the first run captured. `published_at` matters most — it is the
-# public feed's sort key and the keyset cursor's first half.
-UPDATE_TOPIC_METADATA_SQL = """
-UPDATE topics
-   SET title        = COALESCE(?, title),
-       author       = COALESCE(?, author),
-       published_at = COALESCE(?, published_at),
-       status       = 'ready',
-       updated_at   = ?
- WHERE topic_id = ?
-"""
-
-POST_IDS_SQL = """
-SELECT post_number, post_id
-  FROM topic_posts
- WHERE topic_id = ?
- ORDER BY post_number ASC
 """
 
 _PROJECT_ROW = "(?, ?, ?, ?, ?, ?, ?)"
@@ -302,15 +361,20 @@ UPDATE topics
 """
 
 # The counterpart to the claim lease. Without this a run that died mid-topic would
-# park its rows forever: `DUE_TOPICS_SQL` only ever looks at 'discovered' and
-# 'failed', so an in-flight status with an expired lease is unreachable. Attempts
-# are not decremented — a topic that keeps killing runs must still run out of them.
+# park its rows forever: `DUE_TOPICS_SQL` only ever looks at 'ready' and 'failed',
+# so an in-flight status with an expired lease is unreachable. Attempts are not
+# decremented — a topic that keeps killing runs must still run out of them.
+#
+# 'classifying' is now the only in-flight status. 'fetching' no longer exists, and
+# 'ready' is where a claim *starts* rather than somewhere it can stall: with the
+# text already stored, claiming leads straight into classification. Listing 'ready'
+# here would make this statement clear the lease of a row a live run just took.
 RECLAIM_EXPIRED_LEASES_SQL = """
 UPDATE topics
-   SET status = 'discovered', lease_expires_at = NULL, updated_at = ?
+   SET status = 'ready', lease_expires_at = NULL, updated_at = ?
  WHERE lease_expires_at IS NOT NULL
    AND lease_expires_at < ?
-   AND status IN ('fetching', 'ready', 'classifying')
+   AND status = 'classifying'
 """
 
 
@@ -394,11 +458,6 @@ def _clamped(value: str, limit: int = MAX_TEXT_BYTES) -> str:
     return clamp_text(value, limit) or ""
 
 
-def _unique(values: Iterable[int]) -> list[int]:
-    """Deduplicate while keeping first-seen order."""
-    return list(dict.fromkeys(values))
-
-
 # ----------------------------------------------------------------------
 # Run bookkeeping
 # ----------------------------------------------------------------------
@@ -464,24 +523,105 @@ async def close_run(
 # ----------------------------------------------------------------------
 
 
-async def upsert_discovered_topics(db: Any, topic_ids: Sequence[int], *, now: str) -> int:
-    """Register channel-feed candidates. Returns how many were new.
+async def _post_ids(db: Any, topic_id: int) -> dict[int, int]:
+    """`post_number` -> `post_id` for one topic.
 
-    Ids are deduplicated first: the same topic legitimately appears in several
-    channel items, and two rows with the same conflict target inside one VALUES
-    list depend on the SQLite version to behave. Deciding it here makes the
-    outcome identical on every build.
+    Reading this without a transaction is safe because the claim lease makes this
+    run the topic's exclusive writer for the duration.
+    """
+    rows = await query_all(db, POST_IDS_SQL, (int(topic_id),))
+    return {int(row["post_number"]): int(row["post_id"]) for row in rows}
+
+
+async def _existing_topic_ids(db: Any, topic_ids: Sequence[int]) -> set[int]:
+    """Which of `topic_ids` are already rows. Chunked to respect the bind limit."""
+    found: set[int] = set()
+
+    for chunk in chunk_rows([(topic_id,) for topic_id in topic_ids], 1):
+        ids = [row[0] for row in chunk]
+        sql = EXISTING_TOPIC_IDS_SQL.format(placeholders=", ".join("?" * len(ids)))
+        found.update(int(row["topic_id"]) for row in await query_all(db, sql, tuple(ids)))
+
+    return found
+
+
+async def save_discovered_topics(db: Any, topics: Sequence[DiscoveredTopic], *, now: str) -> int:
+    """Register new topics together with their text. Returns how many were new.
+
+    One call does what discovery and fetching used to split between them, because
+    the tag feed no longer splits them: the first post's text arrives in the same
+    item that announces the topic. A row and its evidence are therefore created
+    together, and `topics.status` never passes through a state where one exists
+    without the other.
+
+    **Topics already known are skipped entirely, text included.** The feed is
+    ordered by last activity, so every reply to an old topic puts it back in the
+    window; rewriting `cleaned_text` on each of those bumps would keep changing the
+    inputs under a result the classifier has already settled, and re-running a
+    published topic is explicitly out of scope. The membership test is one query
+    for the whole feed — `ON CONFLICT DO NOTHING` alone could not express this,
+    since it cannot stop the accompanying `topic_posts` write.
+
+    That leaves the conflict clause as the guard against a genuinely concurrent
+    run inserting the same topic between the membership query and this batch. The
+    count returned is the batch's own `changes`, so a topic lost to that race is
+    correctly not counted as discovered by this run.
     """
     _require_iso(now, "now")
 
-    ids = _unique(topic_ids)
-    if not ids:
+    unique = {topic.topic_id: topic for topic in topics}
+    if not unique:
         return 0
 
-    rows = [(topic_id, TOPIC_URL_TEMPLATE.format(topic_id=topic_id), now, now) for topic_id in ids]
-    statements = _insert_statements(db, UPSERT_DISCOVERED_TOPIC_SQL, _TOPIC_ROW, rows)
+    known = await _existing_topic_ids(db, list(unique))
+    fresh = [topic for topic_id, topic in unique.items() if topic_id not in known]
+    if not fresh:
+        return 0
 
-    return sum(await _run_batch(db, statements))
+    topic_rows = [
+        (
+            int(topic.topic_id),
+            topic.canonical_url,
+            clamp_text(topic.title),
+            clamp_text(topic.author),
+            _optional_iso(topic.published_at, "published_at"),
+            now,
+            now,
+        )
+        for topic in fresh
+    ]
+
+    post_rows: list[tuple[Any, ...]] = []
+    for topic in fresh:
+        post_rows.extend(_post_rows(int(topic.topic_id), topic.posts, now))
+
+    # Topic statements first, and all of them: `topic_posts.topic_id` is a foreign
+    # key, so a post chunk running before the last topic chunk would reference a
+    # row that does not exist yet.
+    statements = _insert_statements(db, UPSERT_DISCOVERED_TOPIC_SQL, _TOPIC_ROW, topic_rows)
+    inserted = len(statements)
+    statements.extend(_insert_statements(db, UPSERT_TOPIC_POST_SQL, _POST_ROW, post_rows))
+
+    changes = await _run_batch(db, statements)
+
+    return sum(changes[:inserted])
+
+
+async def load_stored_posts(db: Any, topic_id: int) -> list[StoredPost]:
+    """The persisted posts for one topic, ordered by post number.
+
+    This is what the classifier reads, and it comes from D1 rather than from the
+    feed the same run just parsed. A topic being retried after a failure may have
+    fallen out of the thirty-item window entirely, so a memory path would serve
+    fresh topics and quietly starve retried ones — two code paths where the
+    slower, uniform one costs a single indexed read.
+    """
+    rows = await query_all(db, STORED_POSTS_SQL, (int(topic_id),))
+
+    return [
+        StoredPost(post_number=int(row["post_number"]), text=str(row["cleaned_text"] or ""))
+        for row in rows
+    ]
 
 
 async def list_due_topics(db: Any, *, now: str, limit: int) -> list[int]:
@@ -513,8 +653,23 @@ async def claim_topic(db: Any, topic_id: int, *, now: str, lease_until: str) -> 
     return int(meta.changes) > 0
 
 
+async def topic_attempts(db: Any, topic_id: int) -> int:
+    """How many times this topic has been claimed. 0 when the row is gone.
+
+    Read on the failure path only, to decide whether the retry budget in
+    `sync.py` is spent. `CLAIM_TOPIC_SQL` increments the column but a D1 UPDATE
+    reports only `meta.changes`, so the value needs its own SELECT — and adding
+    `RETURNING` to the claim would rework machinery the plan says to leave alone.
+    """
+    from linuxdo_oss.sync import TOPIC_ATTEMPTS_SQL
+
+    row = await query_one(db, TOPIC_ATTEMPTS_SQL, (int(topic_id),))
+
+    return 0 if row is None else int(row["attempts"])
+
+
 async def reclaim_expired_leases(db: Any, *, now: str) -> int:
-    """Return abandoned in-flight topics to `discovered`. Returns how many.
+    """Return abandoned `classifying` topics to `ready`. Returns how many.
 
     Run this before claiming. It is the only thing that recovers a topic whose run
     died between the claim and a settling transition.
@@ -578,62 +733,6 @@ def _post_rows(topic_id: int, posts: Sequence[PostRow], now: str) -> list[tuple[
         )
 
     return rows
-
-
-async def _post_ids(db: Any, topic_id: int) -> dict[int, int]:
-    """`post_number` -> `post_id` for one topic.
-
-    Reading this without a transaction is safe because the claim lease makes this
-    run the topic's exclusive writer for the duration.
-    """
-    rows = await query_all(db, POST_IDS_SQL, (int(topic_id),))
-    return {int(row["post_number"]): int(row["post_id"]) for row in rows}
-
-
-async def save_topic_posts(
-    db: Any,
-    topic_id: int,
-    posts: Sequence[PostRow],
-    *,
-    now: str,
-    title: str | None = None,
-    author: str | None = None,
-    published_at: str | None = None,
-) -> dict[int, int]:
-    """Persist the retained posts and the topic's own metadata. One batch.
-
-    Topic metadata rides along instead of getting its own call: it arrives from the
-    same feed read, and `published_at` is the public feed's sort key, so a topic
-    whose posts were saved without it would be published into the wrong place in
-    the ordering.
-
-    Returns `post_number` -> `post_id`, read back after the batch. The caller does
-    not need those ids to publish — `publish_topic_result` resolves posts by
-    `post_number` itself — but a caller that wants to confirm what landed should
-    not have to guess.
-    """
-    _require_iso(now, "now")
-
-    statements = _insert_statements(
-        db, UPSERT_TOPIC_POST_SQL, _POST_ROW, _post_rows(int(topic_id), posts, now)
-    )
-    statements.append(
-        _statement(
-            db,
-            UPDATE_TOPIC_METADATA_SQL,
-            (
-                clamp_text(title),
-                clamp_text(author),
-                _optional_iso(published_at, "published_at"),
-                now,
-                int(topic_id),
-            ),
-        )
-    )
-
-    await _run_batch(db, statements)
-
-    return await _post_ids(db, int(topic_id))
 
 
 # ----------------------------------------------------------------------

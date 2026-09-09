@@ -47,7 +47,7 @@ from linuxdo_oss.persistence.read_queries import TOPIC_PROJECTS_SQL, TOPICS_PAGE
 from linuxdo_oss.persistence.write_repository import (
     MAX_ERROR_BYTES,
     MAX_EXCERPT_BYTES,
-    TOPIC_URL_TEMPLATE,
+    DiscoveredTopic,
     MentionInsert,
     PostRow,
     ProjectUpsert,
@@ -55,14 +55,16 @@ from linuxdo_oss.persistence.write_repository import (
     claim_topic,
     close_run,
     list_due_topics,
+    load_stored_posts,
     mark_failed,
     mark_not_relevant,
     open_run,
     publish_topic_result,
     reclaim_expired_leases,
-    save_topic_posts,
-    upsert_discovered_topics,
+    save_discovered_topics,
 )
+
+TOPIC_URL = "https://forum.example/t/topic/{topic_id}"
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
@@ -216,18 +218,33 @@ def status_of(connection: sqlite3.Connection, topic_id: int) -> str:
     ).fetchone()["status"]
 
 
-def make_post(post_number: int, **overrides: Any) -> PostRow:
+def make_post(post_number: int, topic_id: int = TOPIC_ID, **overrides: Any) -> PostRow:
+    """One post row. `guid` carries the topic id because `idx_topic_posts_guid` is
+    unique across the WHOLE table — a bare `guid-1` collides the moment a second
+    topic is seeded, which is a fixture bug, not a repository one."""
     values: dict[str, Any] = {
         "post_number": post_number,
-        "source_url": f"https://linux.do/t/topic/{TOPIC_ID}/{post_number}",
+        "source_url": f"{TOPIC_URL.format(topic_id=topic_id)}/{post_number}",
         "cleaned_text": f"第 {post_number} 楼的正文 {REPO_URL}",
         "is_first_post": post_number == 1,
-        "guid": f"guid-{post_number}",
+        "guid": f"guid-{topic_id}-{post_number}",
         "author": "Ammdjs",
         "published_at": PUBLISHED_AT,
     }
     values.update(overrides)
     return PostRow(**values)
+
+
+def make_topic(topic_id: int, posts: list[PostRow] | None = None) -> DiscoveredTopic:
+    """One topic as the tag feed reader produces it — row and text together."""
+    return DiscoveredTopic(
+        topic_id=topic_id,
+        canonical_url=TOPIC_URL.format(topic_id=topic_id),
+        title="分享一个开源小工具",
+        author="Ammdjs",
+        published_at=PUBLISHED_AT,
+        posts=posts if posts is not None else [make_post(1, topic_id)],
+    )
 
 
 def make_project(**overrides: Any) -> ProjectUpsert:
@@ -254,21 +271,25 @@ def make_mention(post_number: int = 1, **overrides: Any) -> MentionInsert:
     return MentionInsert(**values)
 
 
-def seed_topic(db: FakeD1, topic_id: int, posts: list[PostRow]) -> dict[int, int]:
-    """Discover, claim and save one topic — everything before classification."""
-    run(upsert_discovered_topics(db, [topic_id], now=NOW))
+def seed_topic(db: FakeD1, topic_id: int, posts: list[PostRow]) -> None:
+    """Discover and claim one topic — everything before classification.
+
+    Two steps, not three: the tag feed hands over the row and its text in one item,
+    so `save_discovered_topics` does what discovery and fetching used to split.
+    """
+    run(save_discovered_topics(db, [make_topic(topic_id, posts)], now=NOW))
     assert run(claim_topic(db, topic_id, now=NOW, lease_until=LEASE_UNTIL)) is True
-    return run(
-        save_topic_posts(
-            db,
-            topic_id,
-            posts,
-            now=NOW,
-            title="分享一个开源小工具",
-            author="Ammdjs",
-            published_at=PUBLISHED_AT,
+
+
+def stored_post_numbers(connection: sqlite3.Connection, topic_id: int) -> list[int]:
+    return [
+        row["post_number"]
+        for row in rows(
+            connection,
+            "SELECT post_number FROM topic_posts WHERE topic_id = ? ORDER BY post_number",
+            (topic_id,),
         )
-    )
+    ]
 
 
 # ----------------------------------------------------------------------
@@ -281,10 +302,10 @@ def test_a_full_topic_publish_lands_in_the_public_read_shape(
 ) -> None:
     """The write side is only correct if the read side can see it, so this asserts
     through `read_queries`' own SQL rather than through the tables directly."""
-    post_ids = seed_topic(db, TOPIC_ID, [make_post(1), make_post(4)])
+    seed_topic(db, TOPIC_ID, [make_post(1), make_post(4)])
 
-    assert sorted(post_ids) == [1, 4]
-    assert status_of(connection, TOPIC_ID) == "ready"
+    assert stored_post_numbers(connection, TOPIC_ID) == [1, 4]
+    assert status_of(connection, TOPIC_ID) == "classifying"
 
     run(
         publish_topic_result(
@@ -301,7 +322,7 @@ def test_a_full_topic_publish_lands_in_the_public_read_shape(
 
     feed = rows(connection, TOPICS_PAGE_FIRST_SQL, (10,))
     assert [row["topic_id"] for row in feed] == [TOPIC_ID]
-    assert feed[0]["canonical_url"] == TOPIC_URL_TEMPLATE.format(topic_id=TOPIC_ID)
+    assert feed[0]["canonical_url"] == TOPIC_URL.format(topic_id=TOPIC_ID)
     assert feed[0]["title"] == "分享一个开源小工具"
     assert feed[0]["published_at"] == PUBLISHED_AT
 
@@ -350,10 +371,12 @@ def test_publishing_a_topic_is_a_single_batch(db: FakeD1) -> None:
 def test_reprocessing_the_same_topic_produces_no_duplicates(
     db: FakeD1, connection: sqlite3.Connection
 ) -> None:
-    posts = [make_post(1), make_post(4)]
+    seed_topic(db, TOPIC_ID, [make_post(1), make_post(4)])
 
+    # Twice through the settling write, which is what a reclaimed lease replays.
+    # Re-seeding instead would assert a claim that correctly cannot be won: a
+    # settled topic matches no status `CLAIM_TOPIC_SQL` accepts.
     for _ in range(2):
-        seed_topic(db, TOPIC_ID, posts)
         run(
             publish_topic_result(
                 db,
@@ -375,7 +398,12 @@ def test_a_rerun_refreshes_content_but_keeps_first_seen_times(
     db: FakeD1, connection: sqlite3.Connection
 ) -> None:
     """`created_at` records when a row was first seen; a re-run must not move it,
-    or the audit trail becomes "whenever the cron last ran"."""
+    or the audit trail becomes "whenever the cron last ran".
+
+    Post text is the one thing a re-run does NOT refresh any more. The feed bumps
+    an old topic back into view on every reply, so `save_discovered_topics` skips a
+    topic it already knows — rewriting the text would keep moving the inputs under
+    a result the classifier already settled."""
     seed_topic(db, TOPIC_ID, [make_post(1, cleaned_text="第一版")])
     run(
         publish_topic_result(
@@ -388,7 +416,8 @@ def test_a_rerun_refreshes_content_but_keeps_first_seen_times(
         )
     )
 
-    seed_topic(db, TOPIC_ID, [make_post(1, cleaned_text="第二版")])
+    bumped = make_topic(TOPIC_ID, [make_post(1, cleaned_text="第二版")])
+    assert run(save_discovered_topics(db, [bumped], now=LATER)) == 0
     run(
         publish_topic_result(
             db,
@@ -401,7 +430,7 @@ def test_a_rerun_refreshes_content_but_keeps_first_seen_times(
     )
 
     post = rows(connection, "SELECT cleaned_text, created_at FROM topic_posts")[0]
-    assert post["cleaned_text"] == "第二版"
+    assert post["cleaned_text"] == "第一版"
     assert post["created_at"] == NOW
 
     project = rows(connection, "SELECT summary, created_at, updated_at FROM projects")[0]
@@ -416,25 +445,36 @@ def test_a_rerun_refreshes_content_but_keeps_first_seen_times(
     assert mention["detected_at"] == NOW
 
 
-def test_a_topic_seen_again_in_the_channel_feed_is_not_reset(
+def test_a_topic_bumped_back_into_the_feed_is_not_reset(
     db: FakeD1, connection: sqlite3.Connection
 ) -> None:
-    """DO NOTHING, not DO UPDATE: re-discovering a published topic must not send it
-    back through the whole pipeline on every run, forever."""
-    assert run(upsert_discovered_topics(db, [TOPIC_ID], now=NOW)) == 1
+    """The feed is ordered by last activity, so every reply to an old topic puts it
+    back in the window. Re-discovering a published topic must neither reprocess it
+    nor rewrite the text its published result was derived from."""
+    assert run(save_discovered_topics(db, [make_topic(TOPIC_ID)], now=NOW)) == 1
 
-    seed_topic(db, TOPIC_ID, [make_post(1)])
+    assert run(claim_topic(db, TOPIC_ID, now=NOW, lease_until=LEASE_UNTIL)) is True
     run(publish_topic_result(db, TOPIC_ID, projects=[], mentions=[], now=NOW, prompt_version="v1"))
 
-    assert run(upsert_discovered_topics(db, [TOPIC_ID], now=LATER)) == 0
+    bumped = make_topic(TOPIC_ID, [make_post(1, TOPIC_ID, cleaned_text="编辑过的正文")])
+    assert run(save_discovered_topics(db, [bumped], now=LATER)) == 0
+
     assert status_of(connection, TOPIC_ID) == "published"
+    stored = run(load_stored_posts(db, TOPIC_ID))
+    assert "编辑过的正文" not in stored[0].text
 
 
 def test_duplicate_topic_ids_in_one_call_are_collapsed(
     db: FakeD1, connection: sqlite3.Connection
 ) -> None:
     """The same topic legitimately appears in several channel items."""
-    new_rows = run(upsert_discovered_topics(db, [TOPIC_ID, TOPIC_ID, OTHER_TOPIC_ID], now=NOW))
+    new_rows = run(
+        save_discovered_topics(
+            db,
+            [make_topic(TOPIC_ID), make_topic(TOPIC_ID), make_topic(OTHER_TOPIC_ID)],
+            now=NOW,
+        )
+    )
 
     assert new_rows == 2
     assert count(connection, "topics") == 2
@@ -450,7 +490,7 @@ def test_one_project_two_topics_one_row_two_mentions(
     db: FakeD1, connection: sqlite3.Connection
 ) -> None:
     for topic_id in (TOPIC_ID, OTHER_TOPIC_ID):
-        seed_topic(db, topic_id, [make_post(1)])
+        seed_topic(db, topic_id, [make_post(1, topic_id)])
         run(
             publish_topic_result(
                 db,
@@ -520,9 +560,8 @@ def test_a_large_post_insert_is_chunked_under_the_parameter_ceiling(
     """40 posts is far more parameters than one statement may carry. All of them
     must still land, and no statement may exceed the ceiling."""
     posts = [make_post(number) for number in range(1, 41)]
-    post_ids = seed_topic(db, TOPIC_ID, posts)
+    seed_topic(db, TOPIC_ID, posts)
 
-    assert len(post_ids) == 40
     assert count(connection, "topic_posts") == 40
     assert _widest_statement(db) <= MAX_BOUND_PARAMS
     assert _statements_matching(db, "INTO topic_posts") > 1
@@ -531,7 +570,7 @@ def test_a_large_post_insert_is_chunked_under_the_parameter_ceiling(
 def test_a_large_discovery_batch_is_chunked(db: FakeD1, connection: sqlite3.Connection) -> None:
     topic_ids = list(range(1, 61))
 
-    assert run(upsert_discovered_topics(db, topic_ids, now=NOW)) == 60
+    assert run(save_discovered_topics(db, [make_topic(i) for i in topic_ids], now=NOW)) == 60
     assert count(connection, "topics") == 60
     assert _widest_statement(db) <= MAX_BOUND_PARAMS
     assert _statements_matching(db, "INTO topics") > 1
@@ -575,19 +614,19 @@ def test_many_mentions_are_chunked_and_still_one_batch(
 
 
 def test_only_one_run_can_claim_a_topic(db: FakeD1, connection: sqlite3.Connection) -> None:
-    run(upsert_discovered_topics(db, [TOPIC_ID], now=NOW))
+    run(save_discovered_topics(db, [make_topic(TOPIC_ID)], now=NOW))
 
     assert run(claim_topic(db, TOPIC_ID, now=NOW, lease_until=LEASE_UNTIL)) is True
     assert run(claim_topic(db, TOPIC_ID, now=NOW, lease_until=LEASE_UNTIL)) is False
 
     row = rows(connection, "SELECT status, attempts, lease_expires_at FROM topics")[0]
-    assert row["status"] == "fetching"
+    assert row["status"] == "classifying"
     assert row["attempts"] == 1
     assert row["lease_expires_at"] == LEASE_UNTIL
 
 
 def test_due_topics_respects_the_batch_bound_and_the_lease(db: FakeD1) -> None:
-    run(upsert_discovered_topics(db, list(range(1, 26)), now=NOW))
+    run(save_discovered_topics(db, [make_topic(i) for i in range(1, 26)], now=NOW))
 
     first_batch = run(list_due_topics(db, now=NOW, limit=20))
     assert len(first_batch) == 20
@@ -602,14 +641,14 @@ def test_due_topics_respects_the_batch_bound_and_the_lease(db: FakeD1) -> None:
 def test_a_topic_abandoned_mid_run_is_reclaimed_once_its_lease_expires(
     db: FakeD1, connection: sqlite3.Connection
 ) -> None:
-    """`DUE_TOPICS_SQL` only ever looks at 'discovered' and 'failed', so without the
+    """`DUE_TOPICS_SQL` only ever looks at 'ready' and 'failed', so without the
     reaper a run that died after claiming would park its topics forever."""
     seed_topic(db, TOPIC_ID, [make_post(1)])
-    assert status_of(connection, TOPIC_ID) == "ready"
+    assert status_of(connection, TOPIC_ID) == "classifying"
     assert run(list_due_topics(db, now=LATER, limit=20)) == []
 
     assert run(reclaim_expired_leases(db, now=LATER)) == 1
-    assert status_of(connection, TOPIC_ID) == "discovered"
+    assert status_of(connection, TOPIC_ID) == "ready"
     assert run(list_due_topics(db, now=LATER, limit=20)) == [TOPIC_ID]
 
 
@@ -617,7 +656,7 @@ def test_an_unexpired_lease_is_not_reclaimed(db: FakeD1, connection: sqlite3.Con
     seed_topic(db, TOPIC_ID, [make_post(1)])
 
     assert run(reclaim_expired_leases(db, now=NOW)) == 0
-    assert status_of(connection, TOPIC_ID) == "ready"
+    assert status_of(connection, TOPIC_ID) == "classifying"
 
 
 def test_settled_topics_are_never_reclaimed(db: FakeD1, connection: sqlite3.Connection) -> None:
@@ -685,7 +724,9 @@ def test_publishing_clears_a_previous_failure(db: FakeD1, connection: sqlite3.Co
     seed_topic(db, TOPIC_ID, [make_post(1)])
     run(mark_failed(db, TOPIC_ID, now=NOW, retry_after=LATER, error="FetchError"))
 
-    seed_topic(db, TOPIC_ID, [make_post(1)])
+    # The retry is a fresh claim, and it may only be won once the backoff has
+    # elapsed — claiming at NOW would assert something CLAIM_TOPIC_SQL forbids.
+    assert run(claim_topic(db, TOPIC_ID, now=LATER, lease_until=LEASE_UNTIL)) is True
     run(
         publish_topic_result(
             db,
@@ -837,7 +878,9 @@ def test_a_mention_for_an_unsaved_post_is_refused(
 
     assert error.value.retryable is False
     assert "99" in str(error.value)
-    assert status_of(connection, TOPIC_ID) == "ready", "nothing may publish on a refused write"
+    assert status_of(connection, TOPIC_ID) == "classifying", (
+        "nothing may publish on a refused write"
+    )
 
 
 def test_a_mention_for_a_project_outside_this_publish_is_refused(db: FakeD1) -> None:
@@ -872,7 +915,7 @@ def test_a_timestamp_outside_the_one_format_is_refused(db: FakeD1, moment: str) 
     """The schema compares timestamps as TEXT. A different format produces no
     error and no warning downstream — just silently wrong ordering."""
     with pytest.raises(ValueError):
-        run(upsert_discovered_topics(db, [TOPIC_ID], now=moment))
+        run(save_discovered_topics(db, [make_topic(TOPIC_ID)], now=moment))
 
     with pytest.raises(ValueError):
         run(mark_not_relevant(db, TOPIC_ID, now=moment))

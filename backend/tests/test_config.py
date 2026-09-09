@@ -25,7 +25,7 @@ from linuxdo_oss.llm import LLMProtocol, SchemaMode
 API_KEY = "sk-secret-must-never-be-logged-0123456789"
 
 REQUIRED = {
-    "CHANNEL_FEED_URL": "https://rsshub.example/telegram/channel/linux_do_channel",
+    "TAG_FEED_URL": "https://forum.example/tag/oss/42.rss",
     "LLM_BASE_URL": "https://api.example.com/v1",
     "LLM_MODEL": "gpt-test",
     "LLM_API_KEY": API_KEY,
@@ -339,3 +339,60 @@ def test_a_blank_or_zero_number_keeps_the_pre_existing_default(variable, attribu
         settings = load_settings(make_env(**{variable: blank}))
 
         assert getattr(settings, attribute) == default
+
+
+# ----------------------------------------------------------------------
+# TAG_FEED_URL — the pipeline's only input
+# ----------------------------------------------------------------------
+
+
+def test_the_tag_feed_url_reaches_settings_verbatim():
+    """No normalisation: unlike `LLM_BASE_URL`, nothing is appended to this URL,
+    so a query string or a path suffix is the operator's business."""
+    url = "https://linux.do/tag/2234-tag/2234.rss"
+
+    assert load_settings(make_env(TAG_FEED_URL=url)).tag_feed_url == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://forum.example/tag/oss/42.rss",
+        "ftp://forum.example/tag/oss/42.rss",
+        "//forum.example/tag/oss/42.rss",
+        "forum.example/tag/oss/42.rss",
+    ],
+)
+def test_a_tag_feed_url_that_is_not_https_is_refused(url):
+    """The feed is the sole input to everything this project publishes; plaintext
+    transport would let a network position choose that input."""
+    with pytest.raises(RuntimeError) as caught:
+        load_settings(make_env(TAG_FEED_URL=url))
+
+    assert "TAG_FEED_URL" in str(caught.value)
+
+
+def test_a_tag_feed_url_without_a_host_is_refused():
+    """`feeds/tag_feed.py` derives the expected item host from this value, so a
+    hostless URL would disable the check that keeps foreign topics out of D1."""
+    with pytest.raises(RuntimeError) as caught:
+        load_settings(make_env(TAG_FEED_URL="https:///tag/oss/42.rss"))
+
+    assert "host" in str(caught.value)
+
+
+def test_a_missing_tag_feed_url_aborts_startup():
+    with pytest.raises(RuntimeError) as caught:
+        load_settings(make_env(TAG_FEED_URL=None))
+
+    assert "TAG_FEED_URL" in str(caught.value)
+
+
+def test_the_tag_feed_url_never_appears_in_a_log(caplog):
+    """A self-hosted forum's feed URL can carry an access key in its query string."""
+    secret = "https://forum.example/tag/oss/42.rss?key=super-secret-token"
+
+    with caplog.at_level(logging.WARNING):
+        load_settings(make_env(TAG_FEED_URL=secret, LLM_SCHEMA_MODE="none"))
+
+    assert "super-secret-token" not in caplog.text

@@ -1,13 +1,14 @@
 """Tests for the shared RSS item walker.
 
-Both feed readers stand on this module, so its two failure modes are expensive: an
-item field that quietly goes missing means a topic is never discovered, and a
+The tag feed reader stands on this module, so its two failure modes are expensive:
+an item field that quietly goes missing means a topic is never discovered, and a
 `pubDate` that quietly becomes None means the feed cannot be ordered newest-first.
 
-Fixtures are shaped like the real responses (verified 2026-08-31): the channel feed
-is RSS 2.0 whose items carry only title/description/link/guid/pubDate, `link` points
-at Telegram rather than linux.do, and the topic URL is inside the HTML in
-`description` — with a floor suffix and with hostile `onclick` attributes.
+Fixtures are shaped like a real Discourse list feed (verified against
+`meta.discourse.org`, 2026-09-08): RSS 2.0, `<guid isPermaLink="false">` of the
+form `{host}-topic-{id}`, and the first post's cooked HTML inside `description`
+— kept here with hostile `onclick` attributes, because this module normalizes and
+must not clean.
 
 Documents go through `parse_feed` rather than `ElementTree.fromstring`, because that
 is the only way the readers are allowed to parse and it keeps the two modules
@@ -19,7 +20,7 @@ from __future__ import annotations
 import pytest
 
 from linuxdo_oss.domain.timestamps import is_iso_utc
-from linuxdo_oss.feeds.rss import RssItem, item_text_fields, parse_items, rss_datetime_to_iso
+from linuxdo_oss.feeds.rss import RssItem, parse_items, rss_datetime_to_iso
 from linuxdo_oss.feeds.xml_safe import parse_feed
 
 # ----------------------------------------------------------------------
@@ -40,26 +41,26 @@ ITEM_ONE_DESCRIPTION = (
 # Same shape, a different topic and a different floor suffix.
 ITEM_TWO_DESCRIPTION = "&lt;a href=&quot;https://linux.do/t/topic/2837721/3&quot;&gt;x&lt;/a&gt;"
 
-# The real channel-feed shape: RSS 2.0, five elements per item, `link` pointing at
-# Telegram, and the linux.do topic URL only reachable through the description HTML.
-CHANNEL_FEED = f"""<?xml version="1.0" encoding="UTF-8"?>
+# The real tag-feed shape: RSS 2.0, five elements per item, `guid` carrying the
+# topic id, and the first post's HTML inside `description`.
+TAG_FEED = f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
-    <title>Linux.do Channel</title>
-    <link>https://t.me/s/linux_do_channel</link>
+    <title>Linux.do - Topics tagged 2234-tag</title>
+    <link>https://linux.do/tag/2234-tag/2234</link>
     <ttl>5</ttl>
     <item>
-      <title>@Ammdjs 在 分享一个开源小工具 中发帖</title>
+      <title>分享一个开源小工具</title>
       <description>{ITEM_ONE_DESCRIPTION}</description>
-      <link>https://t.me/linux_do_channel/492492</link>
-      <guid isPermaLink="false">https://t.me/linux_do_channel/492492</guid>
+      <link>https://linux.do/t/topic/2837720</link>
+      <guid isPermaLink="false">linux.do-topic-2837720</guid>
       <pubDate>Mon, 31 Aug 2026 15:18:11 GMT</pubDate>
     </item>
     <item>
-      <title>linmao 在 另一个主题 中发帖</title>
+      <title>另一个主题</title>
       <description>{ITEM_TWO_DESCRIPTION}</description>
-      <link>https://t.me/linux_do_channel/492493</link>
-      <guid isPermaLink="false">https://t.me/linux_do_channel/492493</guid>
+      <link>https://linux.do/t/topic/2837721</link>
+      <guid isPermaLink="false">linux.do-topic-2837721</guid>
       <pubDate>Mon, 31 Aug 2026 16:00:00 GMT</pubDate>
     </item>
   </channel>
@@ -115,36 +116,38 @@ def items_of(document: str) -> list[RssItem]:
 
 
 # ----------------------------------------------------------------------
-# The real channel-feed shape
+# The real tag-feed shape
 # ----------------------------------------------------------------------
 
 
-def test_channel_items_are_returned_in_document_order() -> None:
-    items = items_of(CHANNEL_FEED)
+def test_tag_feed_items_are_returned_in_document_order() -> None:
+    items = items_of(TAG_FEED)
 
     assert [item.guid for item in items] == [
-        "https://t.me/linux_do_channel/492492",
-        "https://t.me/linux_do_channel/492493",
+        "linux.do-topic-2837720",
+        "linux.do-topic-2837721",
     ]
 
 
-def test_channel_item_fields_are_taken_verbatim() -> None:
-    item = items_of(CHANNEL_FEED)[0]
+def test_tag_feed_item_fields_are_taken_verbatim() -> None:
+    item = items_of(TAG_FEED)[0]
 
-    assert item.title == "@Ammdjs 在 分享一个开源小工具 中发帖"
-    # The verified feed points `link` at Telegram. Discovery must not rely on it.
-    assert item.link == "https://t.me/linux_do_channel/492492"
-    assert item.guid == "https://t.me/linux_do_channel/492492"
+    assert item.title == "分享一个开源小工具"
+    assert item.link == "https://linux.do/t/topic/2837720"
+    # The topic id is read from here, not parsed out of `link`, which carries a
+    # display slug the title decides.
+    assert item.guid == "linux.do-topic-2837720"
     # Raw RFC 822, unconverted: conversion is a separate, testable step.
     assert item.pub_date == "Mon, 31 Aug 2026 15:18:11 GMT"
-    # The channel feed has exactly the five known elements, so nothing is left over.
+    # This fixture has exactly the five known elements, so nothing is left over.
     assert item.extras == ()
 
 
-def test_topic_url_survives_inside_the_description_html() -> None:
-    """The whole point of scanning `description`: the linux.do link lives there, with
-    a floor suffix, and nowhere else."""
-    item = items_of(CHANNEL_FEED)[0]
+def test_description_html_reaches_the_caller_intact() -> None:
+    """`description` is the post body. Everything downstream — the text the model
+    reads and every repository candidate — is derived from it, so it must arrive
+    exactly as served."""
+    item = items_of(TAG_FEED)[0]
 
     assert item.description is not None
     assert 'href="https://linux.do/t/topic/2837720/1"' in item.description
@@ -157,7 +160,7 @@ def test_description_is_not_sanitized_here() -> None:
     reader, and a parser that silently strips things is a parser whose output nobody
     can compare against the source.
     """
-    item = items_of(CHANNEL_FEED)[0]
+    item = items_of(TAG_FEED)[0]
 
     assert item.description is not None
     assert "onclick=" in item.description
@@ -165,10 +168,10 @@ def test_description_is_not_sanitized_here() -> None:
 
 def test_channel_level_elements_are_not_item_fields() -> None:
     """`<channel><title>` must not leak into an item."""
-    items = items_of(CHANNEL_FEED)
+    items = items_of(TAG_FEED)
 
-    assert all(item.title != "Linux.do Channel" for item in items)
-    assert all(item.link != "https://t.me/s/linux_do_channel" for item in items)
+    assert all(item.title != "Linux.do - Topics tagged 2234-tag" for item in items)
+    assert all(item.link != "https://linux.do/tag/2234-tag/2234" for item in items)
 
 
 # ----------------------------------------------------------------------
@@ -210,7 +213,7 @@ def test_a_document_with_no_items_yields_no_items() -> None:
 
 def test_duplicate_field_elements_keep_the_first_and_retain_the_rest() -> None:
     """First in document order wins the field; the loser becomes an extra rather
-    than being discarded, so a URL hidden in it is still scanned."""
+    than being discarded, so nothing a generator emits is silently lost."""
     document = (
         "<rss><channel><item>"
         "<description>first body</description>"
@@ -227,7 +230,6 @@ def test_duplicate_field_elements_keep_the_first_and_retain_the_rest() -> None:
         ("description", "second body https://github.com/owner/repo"),
         ("title", "ignored title"),
     )
-    assert "second body https://github.com/owner/repo" in item_text_fields(item)
 
 
 def test_unknown_elements_are_kept_as_extras() -> None:
@@ -406,67 +408,9 @@ def test_unparseable_dates_return_none_instead_of_raising(value: str | None) -> 
 
 def test_item_pub_date_round_trips_through_the_converter() -> None:
     """The two halves used together, which is how the readers will use them."""
-    items = items_of(CHANNEL_FEED)
+    items = items_of(TAG_FEED)
 
     assert [rss_datetime_to_iso(item.pub_date) for item in items] == [
         "2026-08-31T15:18:11.000Z",
         "2026-08-31T16:00:00.000Z",
     ]
-
-
-# ----------------------------------------------------------------------
-# item_text_fields
-# ----------------------------------------------------------------------
-
-
-def test_item_text_fields_covers_every_populated_field() -> None:
-    item = RssItem(
-        title="the title",
-        link="https://t.me/linux_do_channel/1",
-        description="https://linux.do/t/topic/1/2",
-        guid="the guid",
-        pub_date="Mon, 31 Aug 2026 15:18:11 GMT",
-        extras=(("creator", "someone"), ("encoded", "https://github.com/owner/repo")),
-    )
-
-    fields = item_text_fields(item)
-
-    assert fields == [
-        "the title",
-        "https://t.me/linux_do_channel/1",
-        "https://linux.do/t/topic/1/2",
-        "the guid",
-        "someone",
-        "https://github.com/owner/repo",
-    ]
-
-
-def test_item_text_fields_excludes_pub_date() -> None:
-    """An RFC 822 date cannot contain a URL, so scanning it is pure cost."""
-    item = RssItem(
-        title=None,
-        link=None,
-        description=None,
-        guid=None,
-        pub_date="Mon, 31 Aug 2026 15:18:11 GMT",
-        extras=(),
-    )
-
-    assert item_text_fields(item) == []
-
-
-def test_item_text_fields_skips_empty_fields() -> None:
-    item = items_of("<rss><channel><item><title>t</title></item></channel></rss>")[0]
-
-    assert item_text_fields(item) == ["t"]
-
-
-def test_item_text_fields_finds_the_topic_url_in_the_real_feed_shape() -> None:
-    """The end-to-end reason this function exists: with the verified feed, the only
-    field carrying the linux.do URL is `description`."""
-    item = items_of(CHANNEL_FEED)[0]
-
-    fields = item_text_fields(item)
-
-    assert any("https://linux.do/t/topic/2837720/1" in field for field in fields)
-    assert not any("linux.do/t/topic" in field for field in (item.title, item.link, item.guid))
